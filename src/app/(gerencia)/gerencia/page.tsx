@@ -633,12 +633,25 @@ export default function GerenciaPage() {
 
   // ── USUARIOS ─────────────────────────────────────────────────
   async function crearUsuario() {
+    if (!nuevoUsuario.nombre || !nuevoUsuario.email || !nuevoUsuario.password) {
+      toast.error('Completa todos los campos'); return
+    }
     setCreandoUsuario(true)
-    const { data, error } = await supabase.auth.signUp({ email: nuevoUsuario.email, password: nuevoUsuario.password })
-    if (error || !data.user) { toast.error('Error: ' + (error?.message || 'Intente con otro correo')); setCreandoUsuario(false); return }
-    await supabase.from('usuarios').insert({ id: data.user.id, nombre: nuevoUsuario.nombre, rol: nuevoUsuario.rol })
-    toast.success(`Usuario ${nuevoUsuario.nombre} creado`)
-    setModalUsuario(false); setNuevoUsuario({ nombre: '', email: '', password: '', rol: 'mesera' }); setCreandoUsuario(false)
+    try {
+      const res = await fetch('/api/crear-usuario', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(nuevoUsuario),
+      })
+      const data = await res.json()
+      if (!res.ok) { toast.error('Error: ' + data.error); setCreandoUsuario(false); return }
+      toast.success(`✅ Usuario ${nuevoUsuario.nombre} creado correctamente`)
+      setModalUsuario(false)
+      setNuevoUsuario({ nombre: '', email: '', password: '', rol: 'mesera' })
+    } catch {
+      toast.error('Error de conexión al crear usuario')
+    }
+    setCreandoUsuario(false)
   }
 
   // ── CARTA ─────────────────────────────────────────────────────
