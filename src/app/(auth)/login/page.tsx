@@ -38,7 +38,7 @@ export default function LoginPage() {
       redirectTo: `${window.location.origin}/reset-password`,
     })
     setLoading(false)
-    if (error) { toast.error('Error al enviar el correo'); return }
+    if (error) { toast.error(error.message || 'Error al enviar el correo'); return }
     setEnviado(true)
   }
 
