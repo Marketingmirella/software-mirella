@@ -95,6 +95,8 @@ export default function GerenciaPage() {
   const [nuevoUsuario, setNuevoUsuario] = useState({ nombre: '', email: '', password: '', rol: 'mesera' })
   const [creandoUsuario, setCreandoUsuario] = useState(false)
   const [listaUsuarios, setListaUsuarios] = useState<{ id: string; nombre: string; rol: string }[]>([])
+  const [editandoUsuario, setEditandoUsuario] = useState<{ id: string; nombre: string; rol: string } | null>(null)
+  const [guardandoUsuario, setGuardandoUsuario] = useState(false)
 
   // Tiempos
   const [tiemposPorPlato, setTiemposPorPlato] = useState<TiempoStat[]>([])
@@ -767,6 +769,22 @@ export default function GerenciaPage() {
       toast.error('Error de conexión al crear usuario')
     }
     setCreandoUsuario(false)
+  }
+
+  // ── EDITAR USUARIO (rol / nombre) ────────────────────────────
+  async function guardarCambiosUsuario() {
+    if (!editandoUsuario) return
+    setGuardandoUsuario(true)
+    const { error } = await supabase
+      .from('usuarios')
+      .update({ nombre: editandoUsuario.nombre.trim(), rol: editandoUsuario.rol })
+      .eq('id', editandoUsuario.id)
+    setGuardandoUsuario(false)
+    if (error) { toast.error('No se pudo guardar'); return }
+    toast.success('✅ Usuario actualizado')
+    setEditandoUsuario(null)
+    const { data: ul } = await supabase.from('usuarios').select('id, nombre, rol').order('nombre')
+    if (ul) setListaUsuarios(ul)
   }
 
   // ── GESTIÓN ZONAS / MESAS ────────────────────────────────────
@@ -1872,6 +1890,9 @@ export default function GerenciaPage() {
                     mesera:  'bg-orange-100 text-orange-700',
                     cocina:  'bg-green-100 text-green-700',
                   }
+                  const ROL_LABEL: Record<string, string> = {
+                    gerente: 'Gerente', mesera: 'Mesera', cocina: 'Cocina',
+                  }
                   return (
                     <div key={u.id} className={`flex items-center justify-between px-4 py-3.5 ${i !== 0 ? 'border-t border-gray-50' : ''}`}>
                       <div className="flex items-center gap-3">
@@ -1880,9 +1901,17 @@ export default function GerenciaPage() {
                         </div>
                         <span className="font-medium text-gray-900 text-sm">{u.nombre}</span>
                       </div>
-                      <span className={`text-xs font-bold px-2.5 py-1 rounded-full capitalize ${ROL_BADGE[u.rol] || 'bg-gray-100 text-gray-600'}`}>
-                        {u.rol}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-xs font-bold px-2.5 py-1 rounded-full capitalize ${ROL_BADGE[u.rol] || 'bg-gray-100 text-gray-600'}`}>
+                          {ROL_LABEL[u.rol] || u.rol}
+                        </span>
+                        <button
+                          onClick={() => setEditandoUsuario({ id: u.id, nombre: u.nombre, rol: u.rol })}
+                          className="w-7 h-7 bg-gray-100 hover:bg-gray-200 rounded-lg flex items-center justify-center transition-colors"
+                          title="Editar usuario">
+                          <Pencil size={13} className="text-gray-500" />
+                        </button>
+                      </div>
                     </div>
                   )
                 })}
@@ -2601,6 +2630,50 @@ export default function GerenciaPage() {
             </select>
             <button onClick={crearUsuario} disabled={creandoUsuario} className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 text-white font-bold py-3 rounded-xl">
               {creandoUsuario ? 'Creando...' : 'Crear usuario'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal editar usuario ── */}
+      {editandoUsuario && (
+        <div className="fixed inset-0 bg-black/50 flex items-end justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm fade-in space-y-4">
+            <div className="flex justify-between items-center">
+              <h3 className="font-bold text-lg">Editar usuario</h3>
+              <button onClick={() => setEditandoUsuario(null)}><X size={20} /></button>
+            </div>
+
+            <div>
+              <label className="text-sm font-medium text-gray-700 block mb-1">Nombre</label>
+              <input
+                type="text"
+                value={editandoUsuario.nombre}
+                onChange={e => setEditandoUsuario(p => p ? { ...p, nombre: e.target.value } : p)}
+                className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
+              />
+            </div>
+
+            <div>
+              <label className="text-sm font-medium text-gray-700 block mb-1">Rol / Panel que verá</label>
+              <select
+                value={editandoUsuario.rol}
+                onChange={e => setEditandoUsuario(p => p ? { ...p, rol: e.target.value } : p)}
+                className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400">
+                <option value="mesera">👩 Mesera — ve el panel de mesas y pedidos</option>
+                <option value="cocina">👨‍🍳 Cocina — ve el panel de preparación</option>
+                <option value="gerente">👔 Gerente — ve el panel completo</option>
+              </select>
+              <p className="text-xs text-gray-400 mt-1.5">
+                ⚠️ El cambio aplica la próxima vez que el usuario inicie sesión.
+              </p>
+            </div>
+
+            <button
+              onClick={guardarCambiosUsuario}
+              disabled={guardandoUsuario || !editandoUsuario.nombre.trim()}
+              className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 text-white font-bold py-3 rounded-xl transition-colors">
+              {guardandoUsuario ? 'Guardando...' : 'Guardar cambios'}
             </button>
           </div>
         </div>

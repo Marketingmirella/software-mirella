@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { MessageCircle, X, Send, ArrowLeft, Plus, ChevronRight } from 'lucide-react'
+import { MessageCircle, X, Send, ArrowLeft, Plus, ChevronRight, LogOut } from 'lucide-react'
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 interface Mensaje {
@@ -69,6 +69,12 @@ export default function ChatFlotante() {
   // Mantener refs sincronizados (para usarlos dentro de callbacks de realtime)
   useEffect(() => { grupoRef.current = grupoActivo }, [grupoActivo])
   useEffect(() => { miIdRef.current  = miId         }, [miId])
+
+  // ── Cerrar sesión ─────────────────────────────────────────────────────────
+  async function cerrarSesion() {
+    await supabase.auth.signOut()
+    window.location.href = '/login'
+  }
 
   // ── Cargar lista de grupos ──────────────────────────────────────────────────
   const cargarGrupos = useCallback(async (userId: string) => {
@@ -319,11 +325,32 @@ export default function ChatFlotante() {
             ))}
           </div>
 
-          <div className="p-3 border-t border-gray-100 shrink-0">
-            <button onClick={abrirNuevo}
-              className={`w-full ${miRol.color} text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 text-sm hover:opacity-90 active:scale-95 transition-all`}>
-              <Plus size={18} /> Nuevo chat o grupo
-            </button>
+          <div className="border-t border-gray-100 shrink-0">
+            {/* Mi perfil + cerrar sesión */}
+            {miPerfil && (
+              <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className={`w-7 h-7 rounded-full ${miRol.color} flex items-center justify-center text-xs text-white shrink-0`}>
+                    {miRol.emoji}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-gray-700 leading-none truncate">{miPerfil.nombre}</p>
+                    <p className="text-[10px] text-gray-400 mt-0.5">{miRol.etiqueta}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={cerrarSesion}
+                  className="flex items-center gap-1 text-xs text-red-500 hover:text-red-700 font-semibold shrink-0 ml-2 transition-colors">
+                  <LogOut size={13} /> Salir
+                </button>
+              </div>
+            )}
+            <div className="p-3">
+              <button onClick={abrirNuevo}
+                className={`w-full ${miRol.color} text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 text-sm hover:opacity-90 active:scale-95 transition-all`}>
+                <Plus size={18} /> Nuevo chat o grupo
+              </button>
+            </div>
           </div>
         </>
       )}
