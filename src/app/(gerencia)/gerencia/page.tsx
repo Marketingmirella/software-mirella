@@ -124,6 +124,7 @@ export default function GerenciaPage() {
   const [modalAgregarMesa, setModalAgregarMesa] = useState<string | null>(null)
   const [nuevaMesaNumero, setNuevaMesaNumero] = useState('')
   const [guardandoMesa, setGuardandoMesa] = useState(false)
+  const [modalQR, setModalQR] = useState<{ id: number; numero: number; zona: string | null } | null>(null)
 
   // Carta
   const [categorias, setCategorias] = useState<Categoria[]>([])
@@ -476,19 +477,30 @@ export default function GerenciaPage() {
   async function abrirDetalleMesa(mesa: typeof mesas[0]) {
     if (mesa.estado === 'libre') { toast('Mesa libre'); return }
     const { data: pedido } = await supabase.from('pedidos').select(`
-      id, estado, tipo, created_at, notas,
+      id, estado, tipo, created_at, notas, cliente_nombre, cliente_cedula, cliente_telefono,
       mesa:mesas(numero), mesera:usuarios(nombre),
       items:items_pedido(estado, cantidad, precio_unitario, notas, plato:platos(nombre))
     `).eq('mesa_id', mesa.id).in('estado', ['pendiente','en_preparacion','listo','entregado','esperando_pago'])
       .order('created_at', { ascending: false }).limit(1).single()
     if (!pedido) { toast.error('No se encontró el pedido'); return }
     const { data: pagos } = await supabase.from('pagos').select('*').eq('pedido_id', pedido.id).order('created_at')
+    const p = pedido as typeof pedido & { cliente_nombre: string | null; cliente_cedula: string | null; cliente_telefono: string | null }
     const fmt: PedidoDetalle = {
       ...pedido,
       mesa: (pedido.mesa as unknown as { numero: number }),
       mesera: pedido.mesera as unknown as { nombre: string } | null,
       items: (pedido.items as unknown as { estado: string; cantidad: number; precio_unitario: number; notas: string | null; plato: { nombre: string } }[])
-        .map(i => ({ nombre: i.plato?.nombre || '', cantidad: i.cantidad, precio_unitario: i.precio_unitario, notas: i.notas, estado: i.estado }))
+        .map(i => ({ nombre: i.plato?.nombre || '', cantidad: i.cantidad, precio_unitario: i.precio_unitario, notas: i.notas, estado: i.estado })),
+      cliente_nombre:   p.cliente_nombre,
+      cliente_cedula:   p.cliente_cedula,
+      cliente_telefono: p.cliente_telefono,
+    }
+    // Si el pedido ya tiene datos del cliente (vino por QR), pre-llenamos el formulario
+    if (p.cliente_cedula) {
+      setCedulaCliente(p.cliente_cedula)
+      setClienteForm({ nombre: p.cliente_nombre || '', telefono: p.cliente_telefono || '', fecha_cumpleanos: '' })
+      const { data: cl } = await supabase.from('clientes').select('id, nombre, telefono').eq('cedula', p.cliente_cedula).single()
+      if (cl) setClienteEncontrado(cl)
     }
     setMesaDetalle({ mesa, pedido: fmt, pagos: (pagos || []) as PagoRegistrado[] })
     setMontoPago(''); setPropinaPago(''); setMetodoPago('efectivo'); setVistaModal('pago')
@@ -538,8 +550,15 @@ export default function GerenciaPage() {
         toast.success('✅ Domi pagado')
       }
       setPedidoPagadoId(mesaDetalle.pedido.id)
-      setCedulaCliente(''); setClienteEncontrado(null); setClienteForm({ nombre: '', telefono: '', fecha_cumpleanos: '' })
-      setVistaModal('cliente')
+      // Si el pedido ya trae datos del cliente (pedido por QR), no preguntamos de nuevo
+      if (mesaDetalle.pedido.cliente_cedula) {
+        setMesaDetalle(null)
+        setCedulaCliente(''); setClienteEncontrado(null); setClienteForm({ nombre: '', telefono: '', fecha_cumpleanos: '' })
+        setVistaModal('pago')
+      } else {
+        setCedulaCliente(''); setClienteEncontrado(null); setClienteForm({ nombre: '', telefono: '', fecha_cumpleanos: '' })
+        setVistaModal('cliente')
+      }
       cargarMesas(); cargarDatos()
     } else {
       setMesaDetalle(prev => prev ? { ...prev, pagos: (pagosActualizados || []) as PagoRegistrado[] } : null)
@@ -907,6 +926,9 @@ export default function GerenciaPage() {
                         .map(m => (
                           <div key={m.id} className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2">
                             <span className="font-bold text-gray-700 text-sm">Mesa {m.numero}</span>
+                            <button onClick={() => setModalQR(m)} className="text-gray-400 hover:text-purple-600 ml-0.5" title="Ver QR">
+                              <span className="text-xs">QR</span>
+                            </button>
                             {m.estado === 'libre' ? (
                               <button onClick={() => eliminarMesa(m.id)} className="text-red-400 hover:text-red-600 ml-0.5" title="Eliminar">
                                 <X size={14} />
@@ -2182,6 +2204,38 @@ export default function GerenciaPage() {
           </div>
         )
       })()}
+      {/* ── Modal: QR de mesa ── */}
+      {modalQR && (() => {
+        const url = `${typeof window !== 'undefined' ? window.location.origin : ''}/mesa/${modalQR.id}`
+        const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(url)}&bgcolor=ffffff&color=1a1a1a&margin=2`
+        return (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-xs fade-in text-center space-y-4">
+              <div className="flex justify-between items-center">
+                <div>
+                  <p className="font-bold text-gray-900 text-lg">Mesa {modalQR.numero}</p>
+                  {modalQR.zona && <p className="text-xs text-gray-400">{modalQR.zona}</p>}
+                </div>
+                <button onClick={() => setModalQR(null)}><X size={20} className="text-gray-400" /></button>
+              </div>
+              <img src={qrSrc} alt={`QR Mesa ${modalQR.numero}`} className="mx-auto rounded-xl border border-gray-100 p-2" width={200} height={200} />
+              <p className="text-xs text-gray-400 break-all">{url}</p>
+              <button
+                onClick={() => {
+                  const a = document.createElement('a')
+                  a.href = qrSrc
+                  a.download = `QR-Mesa-${modalQR.numero}.png`
+                  a.click()
+                }}
+                className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 rounded-xl text-sm"
+              >
+                Descargar QR
+              </button>
+            </div>
+          </div>
+        )
+      })()}
+
       {/* ── Modal: Nueva zona ── */}
       {modalNuevaZona && (
         <div className="fixed inset-0 bg-black/50 flex items-end justify-center z-50 p-4">
