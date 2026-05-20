@@ -90,6 +90,7 @@ export default function GerenciaPage() {
   const [modalUsuario, setModalUsuario] = useState(false)
   const [nuevoUsuario, setNuevoUsuario] = useState({ nombre: '', email: '', password: '', rol: 'mesera' })
   const [creandoUsuario, setCreandoUsuario] = useState(false)
+  const [listaUsuarios, setListaUsuarios] = useState<{ id: string; nombre: string; rol: string }[]>([])
 
   // Tiempos
   const [tiemposPorPlato, setTiemposPorPlato] = useState<TiempoStat[]>([])
@@ -471,7 +472,12 @@ export default function GerenciaPage() {
       cargarResumen(desde, hasta)
     }
     if (seccion === 'clientes') cargarClientes()
-  }, [seccion, rangoResumen, cargarResumen, cargarClientes, hoyStr])
+    if (seccion === 'usuarios') {
+      supabase.from('usuarios').select('id, nombre, rol').order('nombre').then(({ data }) => {
+        if (data) setListaUsuarios(data)
+      })
+    }
+  }, [seccion, rangoResumen, cargarResumen, cargarClientes, hoyStr, supabase])
 
   // ── DETALLE MESA ─────────────────────────────────────────────
   async function abrirDetalleMesa(mesa: typeof mesas[0]) {
@@ -677,6 +683,9 @@ export default function GerenciaPage() {
       toast.success(`✅ Usuario ${nuevoUsuario.nombre} creado correctamente`)
       setModalUsuario(false)
       setNuevoUsuario({ nombre: '', email: '', password: '', rol: 'mesera' })
+      // Recargar lista
+      const { data: ul } = await supabase.from('usuarios').select('id, nombre, rol').order('nombre')
+      if (ul) setListaUsuarios(ul)
     } catch {
       toast.error('Error de conexión al crear usuario')
     }
@@ -1771,8 +1780,37 @@ export default function GerenciaPage() {
         {/* ══ USUARIOS ════════════════════════════════════════════ */}
         {seccion === 'usuarios' && (
           <div className="space-y-4">
-            <button onClick={() => setModalUsuario(true)} className="w-full bg-purple-600 text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-2"><Plus size={20} /> Crear nuevo usuario</button>
-            <div className="bg-white rounded-2xl border border-gray-100 p-4"><p className="text-sm text-gray-500">Crea usuarios para meseras, cocina o gerentes.</p></div>
+            <button onClick={() => setModalUsuario(true)} className="w-full bg-purple-600 text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-2">
+              <Plus size={20} /> Crear nuevo usuario
+            </button>
+            {listaUsuarios.length === 0 ? (
+              <div className="bg-white rounded-2xl border border-gray-100 p-6 text-center">
+                <p className="text-gray-400 text-sm">No hay usuarios registrados todavía.</p>
+              </div>
+            ) : (
+              <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+                {listaUsuarios.map((u, i) => {
+                  const ROL_BADGE: Record<string, string> = {
+                    gerente: 'bg-purple-100 text-purple-700',
+                    mesera:  'bg-orange-100 text-orange-700',
+                    cocina:  'bg-green-100 text-green-700',
+                  }
+                  return (
+                    <div key={u.id} className={`flex items-center justify-between px-4 py-3.5 ${i !== 0 ? 'border-t border-gray-50' : ''}`}>
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center font-bold text-gray-500 text-sm">
+                          {u.nombre.charAt(0).toUpperCase()}
+                        </div>
+                        <span className="font-medium text-gray-900 text-sm">{u.nombre}</span>
+                      </div>
+                      <span className={`text-xs font-bold px-2.5 py-1 rounded-full capitalize ${ROL_BADGE[u.rol] || 'bg-gray-100 text-gray-600'}`}>
+                        {u.rol}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </div>
         )}
       </div>

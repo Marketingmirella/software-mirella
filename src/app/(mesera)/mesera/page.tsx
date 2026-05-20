@@ -227,9 +227,23 @@ export default function MeseraPage() {
   const platosFiltrados = platos.filter(p => p.categoria_id === categoriaActiva)
   const totalCarrito = carrito.reduce((acc, i) => acc + i.plato.precio * i.cantidad, 0)
 
+  // Paleta de tonos suaves por zona (se asigna por índice)
+  const ZONA_TONOS = [
+    { fondo: 'bg-sky-50',    borde: 'border-sky-100',    titulo: 'text-sky-700',    badge: 'bg-sky-100' },
+    { fondo: 'bg-violet-50', borde: 'border-violet-100', titulo: 'text-violet-700', badge: 'bg-violet-100' },
+    { fondo: 'bg-emerald-50',borde: 'border-emerald-100',titulo: 'text-emerald-700',badge: 'bg-emerald-100' },
+    { fondo: 'bg-amber-50',  borde: 'border-amber-100',  titulo: 'text-amber-700',  badge: 'bg-amber-100' },
+    { fondo: 'bg-rose-50',   borde: 'border-rose-100',   titulo: 'text-rose-700',   badge: 'bg-rose-100' },
+    { fondo: 'bg-teal-50',   borde: 'border-teal-100',   titulo: 'text-teal-700',   badge: 'bg-teal-100' },
+  ]
+  const zonasLista = [...new Set(mesas.map(m => m.zona || 'Sin zona'))].sort((a, b) =>
+    a === 'Sin zona' ? 1 : b === 'Sin zona' ? -1 : a.localeCompare(b, 'es')
+  )
+
   // ── VISTA: MESAS ─────────────────────────────────────────────
   if (vista === 'mesas') return (
-    <div className="min-h-screen bg-gray-50 p-4">
+    <div className="min-h-screen bg-gray-50 p-4 pb-8">
+      {/* Pedidos listos para entregar */}
       {pedidosListos.length > 0 && (
         <div className="mb-4 space-y-2">
           {pedidosListos.map(p => (
@@ -244,10 +258,11 @@ export default function MeseraPage() {
         </div>
       )}
 
-      <div className="flex items-center justify-between mb-6">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-5">
         <div className="flex items-center gap-3">
           <div className="bg-orange-500 p-2 rounded-xl"><UtensilsCrossed size={24} className="text-white" /></div>
-          <h1 className="text-xl font-bold text-gray-900">Selecciona una mesa</h1>
+          <h1 className="text-xl font-bold text-gray-900">Mesas</h1>
         </div>
         <button onClick={iniciarDomi}
           className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2.5 rounded-xl text-sm transition-colors">
@@ -255,18 +270,43 @@ export default function MeseraPage() {
         </button>
       </div>
 
-      <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
-        {mesas.map(mesa => (
-          <button key={mesa.id} onClick={() => seleccionarMesa(mesa)}
-            className={`rounded-2xl p-4 text-center font-bold transition-all border-2 ${
-              mesa.estado === 'libre'          ? 'bg-white border-gray-200 text-gray-800 hover:border-orange-400 hover:shadow-md' :
-              mesa.estado === 'ocupada'        ? 'bg-orange-50 border-orange-300 text-orange-700' :
-              'bg-yellow-50 border-yellow-300 text-yellow-700'
-            }`}>
-            <p className="text-2xl font-black">{mesa.numero}</p>
-            <p className="text-xs mt-1 capitalize">{mesa.estado.replace('_', ' ')}</p>
-          </button>
-        ))}
+      {/* Leyenda */}
+      <div className="flex gap-3 mb-5 text-xs">
+        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-gray-200 inline-block" /> Libre</span>
+        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-orange-400 inline-block" /> Ocupada</span>
+        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-yellow-400 inline-block" /> Cobrando</span>
+      </div>
+
+      {/* Mesas agrupadas por zona */}
+      <div className="space-y-5">
+        {zonasLista.map((zona, idx) => {
+          const tono = ZONA_TONOS[idx % ZONA_TONOS.length]
+          const mesasZona = mesas
+            .filter(m => (m.zona || 'Sin zona') === zona)
+            .sort((a, b) => a.numero - b.numero)
+          return (
+            <div key={zona} className={`rounded-2xl border p-4 ${tono.fondo} ${tono.borde}`}>
+              <p className={`text-xs font-bold uppercase tracking-widest mb-3 ${tono.titulo}`}>
+                {zona}
+              </p>
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+                {mesasZona.map(mesa => (
+                  <button key={mesa.id} onClick={() => seleccionarMesa(mesa)}
+                    className={`rounded-2xl p-4 text-center font-bold transition-all border-2 ${
+                      mesa.estado === 'libre'
+                        ? `bg-white border-gray-200 text-gray-800 hover:border-orange-400 hover:shadow-md`
+                        : mesa.estado === 'ocupada'
+                        ? 'bg-orange-50 border-orange-300 text-orange-700'
+                        : 'bg-yellow-50 border-yellow-300 text-yellow-700'
+                    }`}>
+                    <p className="text-2xl font-black">{mesa.numero}</p>
+                    <p className="text-xs mt-1 capitalize">{mesa.estado.replace('_', ' ')}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )
+        })}
       </div>
 
       {/* Modal mesa ocupada */}
