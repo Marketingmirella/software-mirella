@@ -36,7 +36,7 @@ export default function MesaClientePage({ params }: { params: Promise<{ id: stri
   const [platos, setPlatos]               = useState<(Plato & { inventario: Inventario[] })[]>([])
   const [categoriaActiva, setCategoriaActiva] = useState<number | null>(null)
   const [carrito, setCarrito]             = useState<ItemCarrito[]>([])
-  const [mesa, setMesa]                   = useState<{ numero: number } | null>(null)
+  const [mesa, setMesa]                   = useState<{ numero: number; estado: string } | null>(null)
   const [enviando, setEnviando]           = useState(false)
 
   // Seguimiento del pedido activo
@@ -45,6 +45,10 @@ export default function MesaClientePage({ params }: { params: Promise<{ id: stri
   const [llamadaEnviada, setLlamadaEnviada]       = useState(false)
   const [llamandoMesera, setLlamandoMesera]       = useState(false)
 
+  // Detección de pedido duplicado
+  const [pedidoActivoInfo, setPedidoActivoInfo]   = useState<{ id: string; tipo: string; itemCount: number } | null>(null)
+  const [modalDuplicado, setModalDuplicado]       = useState(false)
+
   const supabase = createClient()
 
   // ── CARGA DEL MENÚ ──────────────────────────────────────────────────────────
@@ -52,7 +56,7 @@ export default function MesaClientePage({ params }: { params: Promise<{ id: stri
     const [{ data: cats }, { data: pls }, { data: mesaData }, { data: invData }] = await Promise.all([
       supabase.from('categorias').select('*').order('orden'),
       supabase.from('platos').select('*').eq('activo', true),
-      supabase.from('mesas').select('numero').eq('id', mesaId).single(),
+      supabase.from('mesas').select('numero, estado').eq('id', mesaId).single(),
       supabase.from('inventario').select('*'),
     ])
     if (cats) { setCategorias(cats); if (cats[0]) setCategoriaActiva(cats[0].id) }
@@ -62,7 +66,25 @@ export default function MesaClientePage({ params }: { params: Promise<{ id: stri
         inventario: (invData || []).filter((i: Inventario) => i.plato_id === p.id),
       })) as unknown as (Plato & { inventario: Inventario[] })[])
     }
-    if (mesaData) setMesa(mesaData)
+    if (mesaData) {
+      setMesa(mesaData as { numero: number; estado: string })
+      // Si la mesa no está libre, verificar si hay pedido activo
+      if ((mesaData as { estado: string }).estado !== 'libre') {
+        const { data: pedidoActivo } = await supabase
+          .from('pedidos')
+          .select('id, tipo, items:items_pedido(id)')
+          .eq('mesa_id', mesaId)
+          .in('estado', ['pendiente', 'en_preparacion', 'listo', 'entregado'])
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        if (pedidoActivo) {
+          const pa = pedidoActivo as { id: string; tipo: string; items: { id: string }[] }
+          setPedidoActivoInfo({ id: pa.id, tipo: pa.tipo, itemCount: pa.items?.length ?? 0 })
+          setModalDuplicado(true)
+        }
+      }
+    }
   }, [supabase, mesaId])
 
   useEffect(() => { cargarMenu() }, [cargarMenu])
@@ -231,25 +253,31 @@ export default function MesaClientePage({ params }: { params: Promise<{ id: stri
     toast.success('¡Platos agregados a tu pedido!')
   }
 
-  // ── LLAMAR MESERA (broadcast sin DB extra) ──────────────────────────────────
+  // ── ACCIONES MODAL PEDIDO DUPLICADO ────────────────────────────────────────
+  async function verPedidoActivo() {
+    if (!pedidoActivoInfo) return
+    setPedidoActualId(pedidoActivoInfo.id)
+    await cargarItemsSeguimiento(pedidoActivoInfo.id)
+    setModalDuplicado(false)
+    setPaso('seguimiento')
+  }
+
+  function agregarAPedidoActivo() {
+    if (!pedidoActivoInfo) return
+    setPedidoActualId(pedidoActivoInfo.id)  // al ir al carrito y confirmar, usará agregarAlPedidoActual()
+    setModalDuplicado(false)
+  }
+
+  // ── LLAMAR MESERA (tabla DB — confiable) ────────────────────────────────────
   async function llamarMesera() {
     if (llamadaEnviada || llamandoMesera || !mesa) return
     setLlamandoMesera(true)
     try {
-      const ch = supabase.channel('llamadas-mesera')
-      await new Promise<void>(resolve => {
-        ch.subscribe(async status => {
-          if (status === 'SUBSCRIBED') {
-            await ch.send({
-              type:    'broadcast',
-              event:   'llamada',
-              payload: { mesa_numero: mesa.numero, mesa_id: mesaId },
-            })
-            resolve()
-          }
-        })
+      const { error } = await supabase.from('llamadas').insert({
+        mesa_id:     parseInt(mesaId),
+        mesa_numero: mesa.numero,
       })
-      supabase.removeChannel(ch)
+      if (error) throw error
       setLlamadaEnviada(true)
       toast.success('¡Mesera notificada! En un momento viene.')
       setTimeout(() => setLlamadaEnviada(false), 60000) // puede llamar de nuevo en 1 min
@@ -511,6 +539,43 @@ export default function MesaClientePage({ params }: { params: Promise<{ id: stri
           )
         })}
       </div>
+
+      {/* ── MODAL: Pedido ya activo en esta mesa ── */}
+      {modalDuplicado && pedidoActivoInfo && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-6">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-sm text-center space-y-4 fade-in shadow-2xl">
+            <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto">
+              <span className="text-4xl">⚠️</span>
+            </div>
+            <div>
+              <p className="text-xl font-black text-gray-900">¡Esta mesa ya tiene un pedido!</p>
+              <p className="text-sm text-gray-500 mt-1.5 leading-relaxed">
+                {pedidoActivoInfo.tipo === 'mesera'
+                  ? 'La mesera ya tomó un pedido para esta mesa'
+                  : 'Ya hay un pedido activo en esta mesa'
+                }{' '}con{' '}
+                <span className="font-bold text-gray-700">
+                  {pedidoActivoInfo.itemCount} plato{pedidoActivoInfo.itemCount !== 1 ? 's' : ''}
+                </span>{' '}en preparación.
+              </p>
+            </div>
+            <div className="space-y-2.5">
+              <button onClick={verPedidoActivo}
+                className="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-4 rounded-2xl text-sm flex items-center justify-center gap-2 transition-colors">
+                👀 Ver estado de mi pedido
+              </button>
+              <button onClick={agregarAPedidoActivo}
+                className="w-full bg-white border-2 border-orange-200 text-orange-600 font-bold py-3.5 rounded-2xl text-sm hover:bg-orange-50 flex items-center justify-center gap-2 transition-colors">
+                ➕ Agregar más platos al pedido
+              </button>
+              <button onClick={() => setModalDuplicado(false)}
+                className="w-full text-gray-400 text-xs py-2 hover:text-gray-600 transition-colors">
+                Continuar de todos modos (pedido nuevo)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

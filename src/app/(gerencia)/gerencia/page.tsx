@@ -85,6 +85,10 @@ export default function GerenciaPage() {
   const [movimientosCaja, setMovimientosCaja] = useState<{ id: string; tipo: string; monto: number; descripcion: string | null; created_at: string }[]>([])
   const [nuevoMov, setNuevoMov] = useState({ tipo: 'egreso' as 'ingreso' | 'egreso', monto: '', descripcion: '' })
   const [agregandoMov, setAgregandoMov] = useState(false)
+  // Inventario por turno
+  const [pasoCaja, setPasoCaja] = useState<'efectivo' | 'inventario'>('efectivo')
+  const [inventarioTurno, setInventarioTurno] = useState<Record<string, number>>({})
+  const [resumenInventario, setResumenInventario] = useState<{ plato_id: string; nombre: string; categoria: string; precio: number; cantidad_inicial: number; cantidad_restante: number }[]>([])
 
   // Usuarios
   const [modalUsuario, setModalUsuario] = useState(false)
@@ -335,6 +339,32 @@ export default function GerenciaPage() {
     setMovimientosCaja(movs || [])
   }, [supabase])
 
+  // ── RESUMEN DE INVENTARIO AL CERRAR TURNO ───────────────────
+  const cargarResumenInventario = useCallback(async (turnoId: string) => {
+    const { data: snapshots } = await supabase
+      .from('turnos_inventario')
+      .select('plato_id, cantidad_inicial, plato:platos(nombre, precio, categoria:categorias(nombre))')
+      .eq('turno_id', turnoId)
+    if (!snapshots || snapshots.length === 0) { setResumenInventario([]); return }
+    const platosIds = (snapshots as unknown as { plato_id: string }[]).map(s => s.plato_id)
+    const { data: invActual } = await supabase
+      .from('inventario').select('plato_id, cantidad_disponible').in('plato_id', platosIds)
+    setResumenInventario((snapshots as unknown as {
+      plato_id: string; cantidad_inicial: number;
+      plato: { nombre: string; precio: number; categoria: { nombre: string } | null }
+    }[]).map(s => {
+      const inv = (invActual || []).find((i: { plato_id: string }) => i.plato_id === s.plato_id) as { cantidad_disponible: number } | undefined
+      return {
+        plato_id: s.plato_id,
+        nombre: s.plato.nombre,
+        categoria: s.plato.categoria?.nombre || '',
+        precio: s.plato.precio,
+        cantidad_inicial: s.cantidad_inicial,
+        cantidad_restante: inv?.cantidad_disponible ?? 0,
+      }
+    }))
+  }, [supabase])
+
   // ── CARGAR ESTADÍSTICAS Y TIEMPOS ────────────────────────────
   const cargarDatos = useCallback(async () => {
     const [{ data: pedidos }, { data: itemsTiempos }, { data: turno }] = await Promise.all([
@@ -457,6 +487,17 @@ export default function GerenciaPage() {
     return () => { supabase.removeChannel(canal) }
   }, [cargarDatos, cargarMesas, cargarCarta, cargarResumen, supabase, hoyStr])
 
+  // Cargar resumen de inventario al abrir modal cerrar turno
+  useEffect(() => {
+    if (modalCaja === 'cerrar' && turnoActivo) {
+      cargarResumenInventario(turnoActivo.id)
+    }
+    if (modalCaja !== 'abrir') {
+      // Limpiar paso caja al cerrar modal
+      if (modalCaja === null) { setPasoCaja('efectivo') }
+    }
+  }, [modalCaja, turnoActivo, cargarResumenInventario])
+
   useEffect(() => {
     if (seccion === 'resumen') {
       if (rangoResumen === 'personalizado') return // se dispara manualmente con el botón
@@ -538,6 +579,14 @@ export default function GerenciaPage() {
 
   async function agregarPago() {
     if (!mesaDetalle || !montoPago) return
+    // ── Bloqueo: todos los ítems deben estar listos o entregados ──────────────
+    const hayEnPreparacion = mesaDetalle.pedido.items.some(
+      i => i.estado === 'pendiente' || i.estado === 'en_preparacion'
+    )
+    if (hayEnPreparacion) {
+      toast.error('⏳ Hay platos que aún no han salido de cocina. Espera a que todo esté listo.')
+      return
+    }
     setAgregandoPago(true)
     const monto = parseFloat(montoPago); const propina = parseFloat(propinaPago || '0')
     if (isNaN(monto) || monto <= 0) { toast.error('Monto inválido'); setAgregandoPago(false); return }
@@ -622,17 +671,45 @@ export default function GerenciaPage() {
   const totalPagado = mesaDetalle?.pagos.reduce((a, p) => a + p.monto + p.propina, 0) ?? 0
   const saldoPendiente = totalPedido - totalPagado
   const vuelto = totalPagado > totalPedido ? totalPagado - totalPedido : 0
+  // Bloqueo de pago: ningún ítem puede estar pendiente o en preparación
+  const itemsSinListar  = mesaDetalle?.pedido.items.filter(i => i.estado === 'pendiente' || i.estado === 'en_preparacion') ?? []
+  const pedidoListoPagar = itemsSinListar.length === 0
 
   // ── CAJA ─────────────────────────────────────────────────────
+  async function irAInventario() {
+    // Pre-cargar cantidades actuales de inventario para el formulario
+    const { data: invActual } = await supabase.from('inventario').select('plato_id, cantidad_disponible')
+    if (invActual) {
+      const init: Record<string, number> = {}
+      ;(invActual as { plato_id: string; cantidad_disponible: number }[]).forEach(i => {
+        init[i.plato_id] = i.cantidad_disponible
+      })
+      setInventarioTurno(init)
+    }
+    setPasoCaja('inventario')
+  }
+
   async function abrirTurno() {
     const { data: { user } } = await supabase.auth.getUser()
     const { data: nuevoTurno } = await supabase
       .from('turnos').insert({ abierto_por: user?.id, monto_inicial: parseFloat(montoInicial) || 0 })
       .select().single()
+
+    if (nuevoTurno?.id) {
+      // Guardar snapshot de inventario para este turno
+      const entries = Object.entries(inventarioTurno).filter(([, qty]) => qty > 0)
+      if (entries.length > 0) {
+        for (const [platoId, qty] of entries) {
+          await supabase.from('inventario').update({ cantidad_disponible: qty }).eq('plato_id', platoId)
+          await supabase.from('turnos_inventario').insert({ turno_id: nuevoTurno.id, plato_id: platoId, cantidad_inicial: qty })
+        }
+      }
+      cargarCaja(nuevoTurno.id)
+    }
+
     toast.success('Turno abierto')
-    setModalCaja(null); setMontoInicial('')
+    setModalCaja(null); setMontoInicial(''); setPasoCaja('efectivo'); setInventarioTurno({})
     await cargarDatos()
-    if (nuevoTurno?.id) cargarCaja(nuevoTurno.id)
   }
   async function cerrarTurno() {
     if (!turnoActivo) { toast.error('No hay turno activo'); return }
@@ -1973,10 +2050,30 @@ export default function GerenciaPage() {
                   </div>
                 </div>
               )}
+              {/* ── Aviso: ítems aún en preparación ── */}
+              {!pedidoListoPagar && (
+                <div className="bg-orange-50 border-2 border-orange-300 rounded-2xl p-4">
+                  <p className="font-black text-orange-700 text-sm flex items-center gap-2">
+                    ⏳ Pedido aún en cocina
+                  </p>
+                  <p className="text-xs text-orange-600 mt-1 leading-relaxed">
+                    {itemsSinListar.length} plato{itemsSinListar.length !== 1 ? 's' : ''} todavía {itemsSinListar.length !== 1 ? 'están' : 'está'} en preparación:
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {itemsSinListar.map((item, i) => (
+                      <span key={i} className={`text-xs font-semibold px-2 py-0.5 rounded-full ${item.estado === 'en_preparacion' ? 'bg-orange-200 text-orange-800' : 'bg-gray-200 text-gray-700'}`}>
+                        {item.cantidad}× {item.nombre} · {item.estado === 'en_preparacion' ? 'preparando' : 'pendiente'}
+                      </span>
+                    ))}
+                  </div>
+                  <p className="text-xs text-orange-500 mt-2 font-medium">El pago se habilitará cuando cocina marque todo como listo.</p>
+                </div>
+              )}
+
               {saldoPendiente > 0 && (
                 <div>
                   <h3 className="font-bold text-gray-700 text-sm mb-3">Registrar pago</h3>
-                  <div className="grid grid-cols-4 gap-2 mb-3">
+                  <div className={`grid grid-cols-4 gap-2 mb-3 transition-opacity ${!pedidoListoPagar ? 'opacity-40 pointer-events-none' : ''}`}>
                     {METODOS.map(m => (
                       <button key={m.id} onClick={() => setMetodoPago(m.id)}
                         className={`py-2 rounded-xl text-xs font-bold flex flex-col items-center gap-1 border-2 transition-all ${metodoPago === m.id ? `${m.color} text-white border-transparent` : 'bg-white border-gray-200 text-gray-600'}`}>
@@ -1984,7 +2081,7 @@ export default function GerenciaPage() {
                       </button>
                     ))}
                   </div>
-                  <div className="flex gap-2 mb-2">
+                  <div className={`flex gap-2 mb-2 transition-opacity ${!pedidoListoPagar ? 'opacity-40 pointer-events-none' : ''}`}>
                     <div className="flex-1">
                       <label className="text-xs text-gray-500 block mb-1">Monto</label>
                       <input type="number" value={montoPago} onChange={e => setMontoPago(e.target.value)} placeholder={`$${saldoPendiente.toLocaleString('es-CO')}`} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-purple-400" />
@@ -1994,18 +2091,43 @@ export default function GerenciaPage() {
                       <input type="number" value={propinaPago} onChange={e => setPropinaPago(e.target.value)} placeholder="$0" className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
                     </div>
                   </div>
-                  <button onClick={() => setMontoPago(String(saldoPendiente))} className="text-xs text-purple-600 font-medium mb-3 hover:underline">→ Usar saldo exacto (${saldoPendiente.toLocaleString('es-CO')})</button>
-                  <button onClick={agregarPago} disabled={agregandoPago || !montoPago} className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2">
-                    <Banknote size={18} /> {agregandoPago ? 'Registrando...' : 'Agregar pago'}
+                  {pedidoListoPagar && (
+                    <button onClick={() => setMontoPago(String(saldoPendiente))} className="text-xs text-purple-600 font-medium mb-3 hover:underline">→ Usar saldo exacto (${saldoPendiente.toLocaleString('es-CO')})</button>
+                  )}
+                  <button
+                    onClick={agregarPago}
+                    disabled={agregandoPago || !montoPago || !pedidoListoPagar}
+                    title={!pedidoListoPagar ? 'Hay platos que aún no han salido de cocina' : ''}
+                    className={`w-full font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition-all ${
+                      !pedidoListoPagar
+                        ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                        : 'bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 text-white'
+                    }`}>
+                    <Banknote size={18} />
+                    {!pedidoListoPagar ? '🔒 Pago bloqueado — pedido en curso' : agregandoPago ? 'Registrando...' : 'Agregar pago'}
                   </button>
                 </div>
               )}
             </div>
             {saldoPendiente <= 0 && (
               <div className="px-5 py-4 border-t">
-                <button onClick={cerrarMesa} className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-2 text-lg">
-                  <CheckCircle size={22} /> Cerrar mesa
+                <button
+                  onClick={pedidoListoPagar ? cerrarMesa : undefined}
+                  disabled={!pedidoListoPagar}
+                  title={!pedidoListoPagar ? 'Hay platos que aún no han salido de cocina' : ''}
+                  className={`w-full font-bold py-4 rounded-2xl flex items-center justify-center gap-2 text-lg transition-all ${
+                    pedidoListoPagar
+                      ? 'bg-green-500 hover:bg-green-600 text-white'
+                      : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                  }`}>
+                  <CheckCircle size={22} />
+                  {pedidoListoPagar ? 'Cerrar mesa' : '🔒 Esperando cocina…'}
                 </button>
+                {!pedidoListoPagar && (
+                  <p className="text-center text-xs text-orange-500 mt-2 font-medium">
+                    ⏳ {itemsSinListar.length} plato{itemsSinListar.length !== 1 ? 's' : ''} aún en preparación
+                  </p>
+                )}
               </div>
             )}
             </>)}
@@ -2071,11 +2193,87 @@ export default function GerenciaPage() {
       {/* ══ MODALES CAJA Y USUARIOS ══════════════════════════════════ */}
       {modalCaja === 'abrir' && (
         <div className="fixed inset-0 bg-black/50 flex items-end justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-sm fade-in">
-            <div className="flex justify-between items-center mb-4"><h3 className="font-bold text-lg">Abrir turno</h3><button onClick={() => setModalCaja(null)}><X size={20} /></button></div>
-            <label className="block text-sm text-gray-600 mb-1">Monto inicial en caja</label>
-            <input type="number" value={montoInicial} onChange={e => setMontoInicial(e.target.value)} placeholder="0" className="w-full border border-gray-200 rounded-xl px-4 py-3 text-lg font-bold focus:outline-none focus:ring-2 focus:ring-green-400 mb-4" />
-            <button onClick={abrirTurno} className="w-full bg-green-500 text-white font-bold py-3 rounded-xl">Abrir turno</button>
+          <div className="bg-white rounded-2xl w-full max-w-sm fade-in max-h-[90vh] flex flex-col overflow-hidden">
+
+            {/* Header con indicador de pasos */}
+            <div className="flex justify-between items-center px-5 py-4 border-b shrink-0">
+              <div>
+                <h3 className="font-bold text-lg">
+                  {pasoCaja === 'efectivo' ? 'Abrir turno' : '📦 Inventario inicial'}
+                </h3>
+                <div className="flex gap-2 mt-1">
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${pasoCaja === 'efectivo' ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'}`}>1. Caja</span>
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${pasoCaja === 'inventario' ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'}`}>2. Inventario</span>
+                </div>
+              </div>
+              <button onClick={() => { setModalCaja(null); setPasoCaja('efectivo') }}><X size={20} /></button>
+            </div>
+
+            {pasoCaja === 'efectivo' ? (
+              /* ── Paso 1: Efectivo ── */
+              <div className="p-5 space-y-4">
+                <div>
+                  <label className="block text-sm text-gray-600 mb-1">Monto inicial en caja (efectivo)</label>
+                  <input type="number" value={montoInicial} onChange={e => setMontoInicial(e.target.value)}
+                    placeholder="0"
+                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-lg font-bold focus:outline-none focus:ring-2 focus:ring-green-400" />
+                </div>
+                <button onClick={irAInventario}
+                  className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2">
+                  Siguiente — Inventario →
+                </button>
+              </div>
+            ) : (
+              /* ── Paso 2: Inventario ── */
+              <>
+                <div className="overflow-y-auto flex-1 px-4 py-3 space-y-4">
+                  <p className="text-sm text-gray-500 bg-yellow-50 border border-yellow-200 rounded-xl px-3 py-2.5">
+                    ✏️ Escribe cuántas unidades hay de cada plato <strong>al abrir el turno</strong>. El sistema las descontará automáticamente con cada pedido.
+                  </p>
+                  {categorias.map(cat => {
+                    const platosCategoria = platos.filter(p => p.activo && p.categoria_id === cat.id)
+                    if (platosCategoria.length === 0) return null
+                    return (
+                      <div key={cat.id}>
+                        <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">{cat.nombre}</p>
+                        <div className="space-y-2">
+                          {platosCategoria.map(p => (
+                            <div key={p.id} className="flex items-center justify-between bg-gray-50 rounded-xl px-3 py-2.5">
+                              <div className="flex-1 min-w-0 mr-3">
+                                <p className="text-sm font-medium text-gray-800 truncate">{p.nombre}</p>
+                                <p className="text-xs text-gray-400">${p.precio.toLocaleString('es-CO')}</p>
+                              </div>
+                              <input
+                                type="number" min="0"
+                                value={inventarioTurno[p.id] ?? ''}
+                                onChange={e => setInventarioTurno(prev => ({
+                                  ...prev, [p.id]: parseInt(e.target.value) || 0
+                                }))}
+                                placeholder="0"
+                                className="w-16 border border-gray-200 rounded-xl px-2 py-1.5 text-sm font-bold text-center focus:outline-none focus:ring-2 focus:ring-green-400 bg-white"
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  })}
+                  {platos.filter(p => p.activo).length === 0 && (
+                    <p className="text-center text-gray-400 text-sm py-4">Sin platos activos en la carta</p>
+                  )}
+                </div>
+                <div className="px-5 py-4 border-t shrink-0 space-y-2">
+                  <button onClick={abrirTurno}
+                    className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-xl">
+                    ✓ Abrir turno
+                  </button>
+                  <button onClick={() => setPasoCaja('efectivo')}
+                    className="w-full text-gray-400 text-sm py-1 hover:text-gray-600">
+                    ← Volver
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -2226,6 +2424,51 @@ export default function GerenciaPage() {
                     <p className="text-xs text-gray-500 mt-1">
                       Sistema: ${totalEsperado.toLocaleString('es-CO')} · Contado: ${totalContado.toLocaleString('es-CO')}
                     </p>
+                  </div>
+                )}
+
+                {/* ── Resumen de inventario del turno ── */}
+                {resumenInventario.length > 0 && (
+                  <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+                    <div className="px-4 py-3 border-b bg-gray-50 flex items-center justify-between">
+                      <h3 className="font-bold text-gray-900 text-sm">📦 Inventario del turno</h3>
+                      <span className="text-xs text-gray-400">{resumenInventario.length} platos</span>
+                    </div>
+                    <div className="divide-y">
+                      {resumenInventario.map(item => {
+                        const vendidos = item.cantidad_inicial - item.cantidad_restante
+                        const valorVendido = vendidos * item.precio
+                        return (
+                          <div key={item.plato_id} className="px-4 py-3">
+                            <div className="flex justify-between items-start gap-2">
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-semibold text-gray-800 truncate">{item.nombre}</p>
+                                <p className="text-xs text-gray-400">{item.categoria}</p>
+                              </div>
+                              <div className="text-right shrink-0">
+                                <p className="font-black text-gray-900 text-sm">{vendidos} vendidos</p>
+                                <p className="text-xs text-green-700 font-semibold">${valorVendido.toLocaleString('es-CO')}</p>
+                              </div>
+                            </div>
+                            <div className="flex gap-4 mt-1 text-xs text-gray-400">
+                              <span>Inicial: <span className="font-semibold text-gray-600">{item.cantidad_inicial}</span></span>
+                              <span>Restante: <span className={`font-semibold ${item.cantidad_restante === 0 ? 'text-red-500' : 'text-gray-600'}`}>{item.cantidad_restante}</span></span>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    {/* Totales finales */}
+                    {(() => {
+                      const totalVendidos = resumenInventario.reduce((a, i) => a + (i.cantidad_inicial - i.cantidad_restante), 0)
+                      const totalValor    = resumenInventario.reduce((a, i) => a + (i.cantidad_inicial - i.cantidad_restante) * i.precio, 0)
+                      return (
+                        <div className="px-4 py-3 bg-purple-50 flex justify-between items-center">
+                          <span className="text-sm font-bold text-purple-700">{totalVendidos} unidades vendidas</span>
+                          <span className="font-black text-purple-900">${totalValor.toLocaleString('es-CO')}</span>
+                        </div>
+                      )
+                    })()}
                   </div>
                 )}
               </div>

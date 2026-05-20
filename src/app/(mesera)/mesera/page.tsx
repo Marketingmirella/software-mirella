@@ -30,6 +30,11 @@ export default function MeseraPage() {
   // Llamadas de clientes
   const [llamadasPendientes, setLlamadasPendientes] = useState<{ id: number; mesa_numero: number }[]>([])
 
+  // Notificaciones de cocina: un plato específico quedó listo
+  const [notifsCocina, setNotifsCocina] = useState<{
+    id: number; mesa_numero: number; plato_nombre: string; pendientes: string[]
+  }[]>([])
+
   const supabase = createClient()
 
   const cargarDatos = useCallback(async () => {
@@ -71,17 +76,64 @@ export default function MeseraPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'inventario' }, cargarDatos)
       .subscribe()
 
-    // Escuchar llamadas de clientes vía broadcast (sin tabla extra)
-    const canalLlamadas = supabase.channel('llamadas-mesera')
-      .on('broadcast', { event: 'llamada' }, ({ payload }) => {
-        const nueva = { id: Date.now(), mesa_numero: payload.mesa_numero as number }
-        setLlamadasPendientes(prev => [...prev, nueva])
+    // Escuchar llamadas de clientes vía tabla DB (confiable)
+    const canalLlamadas = supabase.channel('llamadas-tabla')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'llamadas' }, (payload) => {
+        const row = payload.new as { id: number; mesa_numero: number }
+        setLlamadasPendientes(prev => [...prev, { id: row.id, mesa_numero: row.mesa_numero }])
+      })
+      .subscribe()
+
+    // Escuchar cuando ítems individuales se marcan como listos en cocina
+    const canalItems = supabase.channel('items-cocina-mesera')
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'items_pedido' }, (payload) => {
+        const item = payload.new as { id: string; estado: string; pedido_id: string }
+        if (item.estado !== 'listo') return // solo nos interesa cuando algo queda listo
+
+        // Usar .then() en lugar de async/await para mayor compatibilidad con realtime
+        supabase
+          .from('pedidos')
+          .select('mesa:mesas(numero), items:items_pedido(id, estado, plato:platos(nombre))')
+          .eq('id', item.pedido_id)
+          .maybeSingle()
+          .then(({ data: pedido }) => {
+            if (!pedido) return
+            const p = pedido as unknown as {
+              mesa: { numero: number } | null
+              items: { id: string; estado: string; plato: { nombre: string } }[]
+            }
+            if (!p.mesa) return // domicilio, no aplica
+
+            // Identificar el plato específico que acaba de quedar listo
+            const itemListo = p.items.find(i => i.id === item.id)
+            const platoNombre = itemListo?.plato?.nombre ?? 'Plato'
+
+            // Cuántos platos siguen pendientes después de este
+            const pendientes = p.items
+              .filter(i => i.estado === 'pendiente' || i.estado === 'en_preparacion')
+              .map(i => i.plato.nombre)
+
+            // Crear notificación con ID único para poder descartarla
+            const notifId = Date.now()
+            setNotifsCocina(prev => [...prev, {
+              id: notifId,
+              mesa_numero: p.mesa!.numero,
+              plato_nombre: platoNombre,
+              pendientes,
+            }])
+
+            // Auto-descartar después de 30 segundos
+            setTimeout(() => {
+              setNotifsCocina(prev => prev.filter(n => n.id !== notifId))
+            }, 30000)
+          })
       })
       .subscribe()
 
     return () => {
       supabase.removeChannel(canal)
       supabase.removeChannel(canalLlamadas)
+      supabase.removeChannel(canalItems)
     }
   }, [cargarDatos, cargarPedidosListos, supabase])
 
@@ -273,6 +325,35 @@ export default function MeseraPage() {
         </div>
       )}
 
+      {/* Notificaciones de cocina: plato listo */}
+      {notifsCocina.length > 0 && (
+        <div className="mb-3 space-y-2">
+          {notifsCocina.map(notif => (
+            <div key={notif.id} className="bg-blue-50 border-2 border-blue-300 rounded-xl px-4 py-3 flex items-start justify-between gap-3 fade-in">
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-black text-blue-900">
+                  🍽️ El <span className="text-orange-600">{notif.plato_nombre}</span> de la Mesa {notif.mesa_numero} está listo
+                </p>
+                {notif.pendientes.length > 0 ? (
+                  <p className="text-xs text-orange-600 font-semibold mt-1">
+                    ⏳ Faltan: {notif.pendientes.join(', ')}
+                  </p>
+                ) : (
+                  <p className="text-xs text-green-600 font-semibold mt-1">
+                    ✅ ¡Pedido completo! Ya puedes recoger todo
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={() => setNotifsCocina(prev => prev.filter(n => n.id !== notif.id))}
+                className="text-blue-300 hover:text-blue-600 shrink-0 mt-0.5">
+                <X size={16} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between mb-5">
         <div className="flex items-center gap-3">
@@ -342,7 +423,11 @@ export default function MeseraPage() {
               </p>
             )}
             <button
-              onClick={() => setLlamadasPendientes(prev => prev.slice(1))}
+              onClick={async () => {
+                const llamadaId = llamadasPendientes[0].id
+                setLlamadasPendientes(prev => prev.slice(1))
+                await supabase.from('llamadas').update({ atendida: true }).eq('id', llamadaId)
+              }}
               className="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-4 rounded-2xl text-lg transition-colors"
             >
               ✓ Atender
