@@ -107,7 +107,7 @@ export interface Turno {
 }
 
 // ─── PAGOS ────────────────────────────────────────────────────────────────────
-export type MetodoPago = 'efectivo' | 'tarjeta' | 'transferencia'
+export type MetodoPago = 'efectivo' | 'nequi' | 'daviplata' | 'bancolombia'
 
 export interface Pago {
   id: string
