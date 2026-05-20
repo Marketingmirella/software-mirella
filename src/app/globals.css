@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f9fafb;
+  --foreground: #111827;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Animación de entrada suave */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-in {
+  animation: fadeIn 0.3s ease forwards;
+}
+
+/* Parpadeo para alertas urgentes en cocina */
+@keyframes pulse-red {
+  0%, 100% { background-color: #fef2f2; }
+  50%       { background-color: #fecaca; }
+}
+.alert-pulse {
+  animation: pulse-red 1.5s ease-in-out infinite;
+}
