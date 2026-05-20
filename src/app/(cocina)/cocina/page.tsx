@@ -169,9 +169,22 @@ export default function CocinaPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {pedidos.map(pedido => {
-          const minutos   = tiempoTranscurrido(pedido.created_at, ahora)
+          const itemsPedido = (pedido.items as unknown as ItemPlato[]) ?? []
+
+          // El timer parte desde el ítem añadido MÁS RECIENTEMENTE
+          // Así cuando agregan un adicional, el reloj vuelve a cero
+          const fechasItems = itemsPedido.map(i => new Date(i.created_at).getTime())
+          const fechaReferencia = fechasItems.length > 0
+            ? new Date(Math.max(...fechasItems)).toISOString()
+            : pedido.created_at
+
+          const minutos    = tiempoTranscurrido(fechaReferencia, ahora)
           const esDemorado = minutos >= MINUTOS_LIMITE
           const mesa = (pedido.mesa as unknown as { numero: number } | null)
+
+          // Un ítem es "adicional" si llegó más de 2 min después del pedido original
+          const UMBRAL_ADICIONAL_MS = 2 * 60 * 1000
+
           return (
             <div key={pedido.id}
               className={`rounded-2xl border p-4 fade-in ${esDemorado ? 'bg-red-950 border-red-700 alert-pulse' : 'bg-gray-800 border-gray-700'}`}>
@@ -192,7 +205,7 @@ export default function CocinaPage() {
                 <BadgeTiempo minutos={minutos} />
               </div>
 
-              <BarraProgreso fecha={pedido.created_at} ahora={ahora} />
+              <BarraProgreso fecha={fechaReferencia} ahora={ahora} />
 
               {pedido.notas && (
                 <div className="bg-yellow-900/40 border border-yellow-700 rounded-lg px-3 py-2 mb-3 text-yellow-300 text-sm">
@@ -201,46 +214,57 @@ export default function CocinaPage() {
               )}
 
               <div className="space-y-2">
-                {(pedido.items as unknown as ItemPlato[])?.map(item => (
-                  <div key={item.id}
-                    className={`rounded-xl p-3 ${
-                      item.estado === 'listo'          ? 'bg-green-900/50 border border-green-700' :
-                      item.estado === 'en_preparacion' ? 'bg-blue-900/50 border border-blue-700' :
-                      'bg-gray-700 border border-gray-600'
-                    }`}>
+                {itemsPedido.map(item => {
+                  const esAdicional = (new Date(item.created_at).getTime() - new Date(pedido.created_at).getTime()) > UMBRAL_ADICIONAL_MS
+                  return (
+                    <div key={item.id}
+                      className={`rounded-xl p-3 ${
+                        item.estado === 'listo'          ? 'bg-green-900/50 border border-green-700' :
+                        item.estado === 'en_preparacion' ? 'bg-blue-900/50 border border-blue-700' :
+                        esAdicional                      ? 'bg-purple-900/40 border border-purple-600' :
+                        'bg-gray-700 border border-gray-600'
+                      }`}>
 
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex-1">
-                        <p className="font-semibold text-sm">{item.cantidad}× {item.plato?.nombre}</p>
-                        {item.notas && <p className="text-xs text-yellow-300 mt-0.5">⚠️ {item.notas}</p>}
-                        <p className="text-xs text-gray-400 mt-1">
-                          {item.estado === 'pendiente'      ? '⏳ Pendiente' :
-                           item.estado === 'en_preparacion' ? '🔥 En preparación' : '✅ Listo'}
-                        </p>
-                      </div>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                            <p className="font-semibold text-sm">{item.cantidad}× {item.plato?.nombre}</p>
+                            {esAdicional && item.estado !== 'listo' && (
+                              <span className="text-xs bg-purple-800 text-purple-200 border border-purple-600 px-1.5 py-0.5 rounded-full font-bold">
+                                ➕ Adicional
+                              </span>
+                            )}
+                          </div>
+                          {item.notas && <p className="text-xs text-yellow-300 mt-0.5">⚠️ {item.notas}</p>}
+                          <p className="text-xs text-gray-400 mt-1">
+                            {item.estado === 'pendiente'      ? '⏳ Pendiente' :
+                             item.estado === 'en_preparacion' ? '🔥 En preparación' : '✅ Listo'}
+                          </p>
+                        </div>
 
-                      <div className="flex flex-col gap-1 shrink-0">
-                        {item.estado === 'pendiente' && (
-                          <button
-                            onClick={() => marcarPreparando(item.id, pedido.id)}
-                            className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs px-3 py-2 rounded-lg font-bold transition-all">
-                            🔥 Preparar
-                          </button>
-                        )}
-                        {item.estado === 'en_preparacion' && (
-                          <button
-                            onClick={() => marcarListo(item.id, pedido.id)}
-                            className="bg-green-600 hover:bg-green-700 active:scale-95 text-white text-xs px-3 py-2 rounded-lg font-bold transition-all">
-                            <CheckCircle size={13} className="inline mr-1" />Listo
-                          </button>
-                        )}
-                        {item.estado === 'listo' && (
-                          <span className="text-green-400 text-xs font-bold">✓ Listo</span>
-                        )}
+                        <div className="flex flex-col gap-1 shrink-0">
+                          {item.estado === 'pendiente' && (
+                            <button
+                              onClick={() => marcarPreparando(item.id, pedido.id)}
+                              className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs px-3 py-2 rounded-lg font-bold transition-all">
+                              🔥 Preparar
+                            </button>
+                          )}
+                          {item.estado === 'en_preparacion' && (
+                            <button
+                              onClick={() => marcarListo(item.id, pedido.id)}
+                              className="bg-green-600 hover:bg-green-700 active:scale-95 text-white text-xs px-3 py-2 rounded-lg font-bold transition-all">
+                              <CheckCircle size={13} className="inline mr-1" />Listo
+                            </button>
+                          )}
+                          {item.estado === 'listo' && (
+                            <span className="text-green-400 text-xs font-bold">✓ Listo</span>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
           )
