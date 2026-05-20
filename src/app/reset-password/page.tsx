@@ -15,8 +15,26 @@ export default function ResetPasswordPage() {
   const router   = useRouter()
   const supabase = createClient()
 
-  // Supabase pone el token en el hash de la URL — hay que esperar a que lo procese
+  // Supabase puede mandar el token de dos formas:
+  // 1. PKCE (nuevo): llega como ?code=XXX en la URL
+  // 2. Implícito (viejo): llega en el #hash y dispara onAuthStateChange
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const code = params.get('code')
+
+    if (code) {
+      // Flujo PKCE: intercambiamos el código por una sesión
+      supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
+        if (error) {
+          toast.error('Enlace inválido o expirado. Solicita uno nuevo.')
+        } else {
+          setSesionLista(true)
+        }
+      })
+      return
+    }
+
+    // Flujo implícito: esperamos el evento PASSWORD_RECOVERY
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
       if (event === 'PASSWORD_RECOVERY') setSesionLista(true)
     })
