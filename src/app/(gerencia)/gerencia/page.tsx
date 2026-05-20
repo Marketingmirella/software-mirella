@@ -7,7 +7,7 @@ import {
   BarChart3, TrendingUp, Users, DollarSign, Clock, ChefHat,
   Plus, X, Play, Square, MapPin, CheckCircle, Banknote,
   Pencil, Trash2, UtensilsCrossed, Timer, UserCircle, Search, Bike,
-  Download, SlidersHorizontal, CalendarDays
+  Download, SlidersHorizontal, CalendarDays, Settings
 } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -114,6 +114,16 @@ export default function GerenciaPage() {
   const [cargandoClientes, setCargandoClientes] = useState(false)
   const [ordenClientes, setOrdenClientes] = useState<'mayor_consumo' | 'menor_consumo' | 'az' | 'cumpleanos'>('mayor_consumo')
   const [filtroMesCumple, setFiltroMesCumple] = useState<number>(0) // 0 = todos los meses
+
+  // Gestión de zonas y mesas
+  const [modoGestionMesas, setModoGestionMesas] = useState(false)
+  const [modalNuevaZona, setModalNuevaZona] = useState(false)
+  const [nuevaZonaNombre, setNuevaZonaNombre] = useState('')
+  const [modalRenombrarZona, setModalRenombrarZona] = useState<string | null>(null)
+  const [renombrarZonaValor, setRenombrarZonaValor] = useState('')
+  const [modalAgregarMesa, setModalAgregarMesa] = useState<string | null>(null)
+  const [nuevaMesaNumero, setNuevaMesaNumero] = useState('')
+  const [guardandoMesa, setGuardandoMesa] = useState(false)
 
   // Carta
   const [categorias, setCategorias] = useState<Categoria[]>([])
@@ -654,6 +664,51 @@ export default function GerenciaPage() {
     setCreandoUsuario(false)
   }
 
+  // ── GESTIÓN ZONAS / MESAS ────────────────────────────────────
+  async function crearZonaConMesa() {
+    if (!nuevaZonaNombre.trim()) { toast.error('Escribe el nombre de la zona'); return }
+    const num = parseInt(nuevaMesaNumero)
+    if (isNaN(num) || num <= 0) { toast.error('Número de mesa inválido'); return }
+    setGuardandoMesa(true)
+    const { error } = await supabase.from('mesas').insert({ numero: num, estado: 'libre', zona: nuevaZonaNombre.trim() })
+    setGuardandoMesa(false)
+    if (error) { toast.error('Error: ' + error.message); return }
+    toast.success(`Zona "${nuevaZonaNombre.trim()}" creada con mesa ${num}`)
+    setModalNuevaZona(false); setNuevaZonaNombre(''); setNuevaMesaNumero('')
+    await cargarMesas()
+  }
+
+  async function agregarMesaEnZona(zona: string) {
+    const num = parseInt(nuevaMesaNumero)
+    if (isNaN(num) || num <= 0) { toast.error('Número inválido'); return }
+    setGuardandoMesa(true)
+    const { error } = await supabase.from('mesas').insert({ numero: num, estado: 'libre', zona })
+    setGuardandoMesa(false)
+    if (error) { toast.error('Error: ' + error.message); return }
+    toast.success(`Mesa ${num} agregada`)
+    setModalAgregarMesa(null); setNuevaMesaNumero('')
+    await cargarMesas()
+  }
+
+  async function renombrarZona(viejo: string, nuevo: string) {
+    if (!nuevo.trim()) { toast.error('Escribe el nuevo nombre'); return }
+    const { error } = await supabase.from('mesas').update({ zona: nuevo.trim() }).eq('zona', viejo)
+    if (error) { toast.error('Error: ' + error.message); return }
+    toast.success('Zona renombrada')
+    setModalRenombrarZona(null); setRenombrarZonaValor('')
+    await cargarMesas()
+  }
+
+  async function eliminarMesa(id: number) {
+    const mesa = mesas.find(m => m.id === id)
+    if (mesa?.estado !== 'libre') { toast.error('Solo puedes eliminar mesas que estén libres'); return }
+    if (!confirm('¿Eliminar esta mesa?')) return
+    const { error } = await supabase.from('mesas').delete().eq('id', id)
+    if (error) { toast.error('Error: ' + error.message); return }
+    toast.success('Mesa eliminada')
+    await cargarMesas()
+  }
+
   // ── CARTA ─────────────────────────────────────────────────────
   function abrirNuevoPlato() {
     setPlatoForm({ ...PLATO_VACIO, categoria_id: categorias[0]?.id || 0 })
@@ -757,6 +812,11 @@ export default function GerenciaPage() {
     toast.success(`${lista.length} clientes exportados ✓`)
   }
 
+  // Zonas únicas derivadas de las mesas (orden alfabético, nulas al final)
+  const zonasLista = [...new Set(mesas.map(m => m.zona || 'Sin zona'))].sort((a, b) =>
+    a === 'Sin zona' ? 1 : b === 'Sin zona' ? -1 : a.localeCompare(b, 'es')
+  )
+
   const nav = [
     { id: 'mesas',    label: 'Mesas',    icon: <MapPin size={16} />          },
     { id: 'carta',    label: 'Carta',    icon: <UtensilsCrossed size={16} /> },
@@ -798,24 +858,107 @@ export default function GerenciaPage() {
         {/* ══ MESAS ══════════════════════════════════════════════ */}
         {seccion === 'mesas' && (
           <div>
-            <div className="flex gap-3 mb-4 text-xs flex-wrap">
-              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-gray-200 inline-block" /> Libre</span>
-              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-orange-400 inline-block" /> Ocupada</span>
-              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-yellow-400 inline-block" /> Esperando pago</span>
+            {/* Header: leyenda + botón gestionar */}
+            <div className="flex items-center justify-between mb-4">
+              {!modoGestionMesas ? (
+                <div className="flex gap-3 text-xs flex-wrap">
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-gray-200 inline-block" /> Libre</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-orange-400 inline-block" /> Ocupada</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-yellow-400 inline-block" /> Esperando pago</span>
+                </div>
+              ) : (
+                <p className="text-sm font-bold text-purple-700">Modo gestión de mesas</p>
+              )}
+              <button onClick={() => setModoGestionMesas(g => !g)}
+                className={`text-xs font-bold px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition-colors ${modoGestionMesas ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                <Settings size={13} /> {modoGestionMesas ? 'Salir' : 'Gestionar'}
+              </button>
             </div>
-            <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
-              {mesas.map(mesa => (
-                <button key={mesa.id} onClick={() => abrirDetalleMesa(mesa)}
-                  className={`rounded-2xl p-4 text-center font-bold transition-all border-2 ${
-                    mesa.estado === 'libre'          ? 'bg-white border-gray-200 text-gray-500' :
-                    mesa.estado === 'ocupada'        ? 'bg-orange-50 border-orange-400 text-orange-700' :
-                    'bg-yellow-50 border-yellow-400 text-yellow-700'
-                  }`}>
-                  <p className="text-3xl font-black">{mesa.numero}</p>
-                  <p className="text-xs mt-1 capitalize">{mesa.estado.replace('_', ' ')}</p>
+
+            {modoGestionMesas ? (
+              /* ── MODO GESTIÓN ── */
+              <div className="space-y-4">
+                <button onClick={() => { setModalNuevaZona(true); setNuevaZonaNombre(''); setNuevaMesaNumero('') }}
+                  className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 rounded-2xl flex items-center justify-center gap-2">
+                  <Plus size={18} /> Nueva zona
                 </button>
-              ))}
-            </div>
+                {zonasLista.length === 0 && (
+                  <p className="text-center text-gray-400 text-sm py-8">No hay zonas. Crea la primera.</p>
+                )}
+                {zonasLista.map(zona => (
+                  <div key={zona} className="bg-white rounded-2xl border border-gray-100 p-4">
+                    <div className="flex items-center justify-between mb-3 gap-2">
+                      <span className="font-bold text-gray-900 text-base">{zona}</span>
+                      <div className="flex gap-2 shrink-0">
+                        <button onClick={() => { setModalRenombrarZona(zona); setRenombrarZonaValor(zona) }}
+                          className="text-xs bg-gray-100 hover:bg-gray-200 px-2 py-1.5 rounded-lg flex items-center gap-1 font-medium">
+                          <Pencil size={12} /> Renombrar
+                        </button>
+                        <button onClick={() => { setModalAgregarMesa(zona); setNuevaMesaNumero('') }}
+                          className="text-xs bg-purple-100 hover:bg-purple-200 text-purple-700 px-2 py-1.5 rounded-lg flex items-center gap-1 font-medium">
+                          <Plus size={12} /> Mesa
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {mesas
+                        .filter(m => (m.zona || 'Sin zona') === zona)
+                        .sort((a, b) => a.numero - b.numero)
+                        .map(m => (
+                          <div key={m.id} className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2">
+                            <span className="font-bold text-gray-700 text-sm">Mesa {m.numero}</span>
+                            {m.estado === 'libre' ? (
+                              <button onClick={() => eliminarMesa(m.id)} className="text-red-400 hover:text-red-600 ml-0.5" title="Eliminar">
+                                <X size={14} />
+                              </button>
+                            ) : (
+                              <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${m.estado === 'ocupada' ? 'bg-orange-100 text-orange-600' : 'bg-yellow-100 text-yellow-700'}`}>
+                                {m.estado === 'ocupada' ? 'ocupada' : 'cobrando'}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      {mesas.filter(m => (m.zona || 'Sin zona') === zona).length === 0 && (
+                        <p className="text-sm text-gray-400 italic">Sin mesas</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              /* ── MODO NORMAL: agrupado por zona ── */
+              <div className="space-y-5">
+                {zonasLista.map(zona => (
+                  <div key={zona}>
+                    <h3 className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">{zona}</h3>
+                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+                      {mesas
+                        .filter(m => (m.zona || 'Sin zona') === zona)
+                        .sort((a, b) => a.numero - b.numero)
+                        .map(mesa => (
+                          <button key={mesa.id} onClick={() => abrirDetalleMesa(mesa)}
+                            className={`rounded-2xl p-4 text-center font-bold transition-all border-2 ${
+                              mesa.estado === 'libre'          ? 'bg-white border-gray-200 text-gray-500' :
+                              mesa.estado === 'ocupada'        ? 'bg-orange-50 border-orange-400 text-orange-700' :
+                              'bg-yellow-50 border-yellow-400 text-yellow-700'
+                            }`}>
+                            <p className="text-3xl font-black">{mesa.numero}</p>
+                            <p className="text-xs mt-1 capitalize">{mesa.estado.replace('_', ' ')}</p>
+                          </button>
+                        ))}
+                    </div>
+                  </div>
+                ))}
+                {mesas.length === 0 && (
+                  <div className="text-center py-12">
+                    <p className="text-gray-400 text-sm mb-3">No hay mesas configuradas.</p>
+                    <button onClick={() => setModoGestionMesas(true)} className="text-purple-600 font-bold text-sm underline">
+                      Crear primera zona →
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Panel domicilios del día */}
             {domiActivos.length > 0 && (
@@ -2039,6 +2182,78 @@ export default function GerenciaPage() {
           </div>
         )
       })()}
+      {/* ── Modal: Nueva zona ── */}
+      {modalNuevaZona && (
+        <div className="fixed inset-0 bg-black/50 flex items-end justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm fade-in space-y-4">
+            <div className="flex justify-between items-center">
+              <h3 className="font-bold text-lg">Nueva zona</h3>
+              <button onClick={() => setModalNuevaZona(false)}><X size={20} /></button>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-500 block mb-1">Nombre de la zona</label>
+              <input type="text" placeholder="Ej: Terraza, Salón VIP, Zona A..."
+                value={nuevaZonaNombre} onChange={e => setNuevaZonaNombre(e.target.value)}
+                className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-500 block mb-1">Número de la primera mesa</label>
+              <input type="number" min="1" placeholder="Ej: 1"
+                value={nuevaMesaNumero} onChange={e => setNuevaMesaNumero(e.target.value)}
+                className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
+            </div>
+            <button onClick={crearZonaConMesa} disabled={guardandoMesa}
+              className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 text-white font-bold py-3 rounded-xl">
+              {guardandoMesa ? 'Creando...' : 'Crear zona'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal: Renombrar zona ── */}
+      {modalRenombrarZona && (
+        <div className="fixed inset-0 bg-black/50 flex items-end justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm fade-in space-y-4">
+            <div className="flex justify-between items-center">
+              <h3 className="font-bold text-lg">Renombrar zona</h3>
+              <button onClick={() => setModalRenombrarZona(null)}><X size={20} /></button>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-500 block mb-1">Nuevo nombre</label>
+              <input type="text" placeholder="Nombre de la zona"
+                value={renombrarZonaValor} onChange={e => setRenombrarZonaValor(e.target.value)}
+                className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
+            </div>
+            <button onClick={() => renombrarZona(modalRenombrarZona, renombrarZonaValor)}
+              className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 rounded-xl">
+              Guardar nombre
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal: Agregar mesa a zona ── */}
+      {modalAgregarMesa && (
+        <div className="fixed inset-0 bg-black/50 flex items-end justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm fade-in space-y-4">
+            <div className="flex justify-between items-center">
+              <h3 className="font-bold text-lg">Agregar mesa — {modalAgregarMesa}</h3>
+              <button onClick={() => setModalAgregarMesa(null)}><X size={20} /></button>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-500 block mb-1">Número de mesa</label>
+              <input type="number" min="1" placeholder="Ej: 5"
+                value={nuevaMesaNumero} onChange={e => setNuevaMesaNumero(e.target.value)}
+                className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
+            </div>
+            <button onClick={() => agregarMesaEnZona(modalAgregarMesa)} disabled={guardandoMesa}
+              className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 text-white font-bold py-3 rounded-xl">
+              {guardandoMesa ? 'Agregando...' : 'Agregar mesa'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {modalUsuario && (
         <div className="fixed inset-0 bg-black/50 flex items-end justify-center z-50 p-4">
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm fade-in space-y-3">
