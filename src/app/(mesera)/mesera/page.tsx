@@ -27,6 +27,9 @@ export default function MeseraPage() {
   const [pedidoExistenteId, setPedidoExistenteId] = useState<string | null>(null)
   const [mesaTemporal, setMesaTemporal] = useState<Mesa | null>(null)
 
+  // Llamadas de clientes
+  const [llamadasPendientes, setLlamadasPendientes] = useState<{ id: number; mesa_numero: number }[]>([])
+
   const supabase = createClient()
 
   const cargarDatos = useCallback(async () => {
@@ -67,7 +70,19 @@ export default function MeseraPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'pedidos' }, () => { cargarPedidosListos(); cargarDatos() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'inventario' }, cargarDatos)
       .subscribe()
-    return () => { supabase.removeChannel(canal) }
+
+    // Escuchar llamadas de clientes vía broadcast (sin tabla extra)
+    const canalLlamadas = supabase.channel('llamadas-mesera')
+      .on('broadcast', { event: 'llamada' }, ({ payload }) => {
+        const nueva = { id: Date.now(), mesa_numero: payload.mesa_numero as number }
+        setLlamadasPendientes(prev => [...prev, nueva])
+      })
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(canal)
+      supabase.removeChannel(canalLlamadas)
+    }
   }, [cargarDatos, cargarPedidosListos, supabase])
 
   // ── SELECCIONAR MESA ─────────────────────────────────────────
@@ -308,6 +323,33 @@ export default function MeseraPage() {
           )
         })}
       </div>
+
+      {/* ── POPUP: Llamada de cliente ── */}
+      {llamadasPendientes.length > 0 && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-6">
+          <div className="bg-white rounded-3xl p-8 w-full max-w-xs text-center shadow-2xl fade-in">
+            <div className="w-20 h-20 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Bell size={40} className="text-orange-500 animate-bounce" />
+            </div>
+            <p className="text-2xl font-black text-gray-900 mb-1">¡Llamada!</p>
+            <p className="text-gray-500 mb-1 text-base">
+              Mesa <span className="font-black text-gray-900 text-2xl">{llamadasPendientes[0].mesa_numero}</span>
+            </p>
+            <p className="text-gray-400 text-sm mb-6">El cliente te necesita</p>
+            {llamadasPendientes.length > 1 && (
+              <p className="text-xs text-orange-500 font-semibold mb-4">
+                +{llamadasPendientes.length - 1} llamada{llamadasPendientes.length - 1 > 1 ? 's' : ''} más en espera
+              </p>
+            )}
+            <button
+              onClick={() => setLlamadasPendientes(prev => prev.slice(1))}
+              className="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-4 rounded-2xl text-lg transition-colors"
+            >
+              ✓ Atender
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Modal mesa ocupada */}
       {modalMesaOcupada && (
