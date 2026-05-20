@@ -89,7 +89,7 @@ export default function ChatFlotante() {
       prev.forEach(g => { noLeidosMap[g.id] = g.noLeidos })
 
       const gruposDB: GrupoChat[] = (data || []).map(m => {
-        const g = m.grupo as { id: string; nombre: string; tipo: string }
+        const g = m.grupo as unknown as { id: string; nombre: string; tipo: string }
         return { id: g.id, nombre: g.nombre, tipo: g.tipo as GrupoChat['tipo'], noLeidos: noLeidosMap[g.id] ?? 0 }
       })
 
@@ -213,7 +213,7 @@ export default function ChatFlotante() {
         .eq('usuario_id', miId)
 
       const idsDirectos = (memb || [])
-        .filter(m => (m.grupo as { tipo: string })?.tipo === 'directo')
+        .filter(m => (m.grupo as unknown as { tipo: string } | null)?.tipo === 'directo')
         .map(m => m.grupo_id)
 
       if (idsDirectos.length) {
