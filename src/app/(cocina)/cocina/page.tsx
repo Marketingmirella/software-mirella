@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Pedido, ItemPedido } from '@/types'
 import toast from 'react-hot-toast'
-import { Clock, ChefHat, CheckCircle, AlertTriangle, UtensilsCrossed } from 'lucide-react'
+import { Clock, ChefHat, CheckCircle, AlertTriangle, UtensilsCrossed, Lock } from 'lucide-react'
 
 const MINUTOS_LIMITE = 20
 
@@ -75,8 +75,24 @@ export default function CocinaPage() {
   const [pedidos, setPedidos] = useState<Pedido[]>([])
   const [cargando, setCargando] = useState(true)
   const [ahora, setAhora]     = useState(Date.now())
+  const [bloqueoConfig, setBloqueoConfig] = useState<{ activo: boolean; cantidad: number }>({ activo: false, cantidad: 3 })
 
   const supabase = createClient()
+
+  const cargarConfig = useCallback(async () => {
+    const { data } = await supabase
+      .from('configuracion')
+      .select('clave, valor')
+      .in('clave', ['bloqueo_cocina_activo', 'bloqueo_cocina_cantidad'])
+    if (data) {
+      const cfg: Record<string, string> = {}
+      data.forEach((r: { clave: string; valor: string }) => { cfg[r.clave] = r.valor })
+      setBloqueoConfig({
+        activo:   cfg['bloqueo_cocina_activo'] === 'true',
+        cantidad: parseInt(cfg['bloqueo_cocina_cantidad'] || '3') || 3,
+      })
+    }
+  }, [supabase])
 
   const cargarPedidos = useCallback(async () => {
     const { data } = await supabase
@@ -90,14 +106,16 @@ export default function CocinaPage() {
 
   useEffect(() => {
     cargarPedidos()
+    cargarConfig()
     const canal = supabase.channel('cocina-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'pedidos' }, cargarPedidos)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'items_pedido' }, cargarPedidos)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'configuracion' }, cargarConfig)
       .subscribe()
     const intervalo = setInterval(cargarPedidos, 60000)
     const tick      = setInterval(() => setAhora(Date.now()), 1000)
     return () => { supabase.removeChannel(canal); clearInterval(intervalo); clearInterval(tick) }
-  }, [cargarPedidos, supabase])
+  }, [cargarPedidos, cargarConfig, supabase])
 
   // ── MARCAR EN PREPARACIÓN ─────────────────────────────────────
   async function marcarPreparando(itemId: string, pedidoId: string) {
@@ -142,6 +160,10 @@ export default function CocinaPage() {
     </div>
   )
 
+  // Bloqueo de comandas: mostrar solo los primeros N pedidos cuando está activo
+  const pedidosMostrados = bloqueoConfig.activo ? pedidos.slice(0, bloqueoConfig.cantidad) : pedidos
+  const pedidosBloqueados = bloqueoConfig.activo ? Math.max(0, pedidos.length - bloqueoConfig.cantidad) : 0
+
   return (
     <div className="min-h-screen bg-gray-900 text-white p-4">
       {/* Header */}
@@ -150,7 +172,10 @@ export default function CocinaPage() {
           <div className="bg-orange-500 p-2 rounded-xl"><ChefHat size={28} /></div>
           <div>
             <h1 className="text-xl font-bold">Cocina</h1>
-            <p className="text-gray-400 text-sm">{pedidos.length} pedido(s) activo(s)</p>
+            <p className="text-gray-400 text-sm">
+              {pedidosMostrados.length}{pedidosBloqueados > 0 ? `/${pedidos.length}` : ''} pedido(s) activo(s)
+              {bloqueoConfig.activo && <span className="ml-2 text-orange-400 text-xs font-bold">🔒 Bloqueo activo</span>}
+            </p>
           </div>
         </div>
         <div className="text-right text-sm text-gray-400">
@@ -158,6 +183,17 @@ export default function CocinaPage() {
           <p className="text-red-400 font-bold">{MINUTOS_LIMITE} min</p>
         </div>
       </div>
+
+      {/* Banner: pedidos bloqueados en espera */}
+      {pedidosBloqueados > 0 && (
+        <div className="mb-4 bg-orange-900/40 border border-orange-700 rounded-2xl px-4 py-3 flex items-center gap-3">
+          <Lock size={18} className="text-orange-400 shrink-0" />
+          <p className="text-orange-300 text-sm leading-snug">
+            <span className="font-bold">{pedidosBloqueados} pedido{pedidosBloqueados !== 1 ? 's' : ''} en espera</span>
+            {' '}— termina los actuales para que aparezcan en orden
+          </p>
+        </div>
+      )}
 
       {pedidos.length === 0 && (
         <div className="flex flex-col items-center justify-center h-64 text-gray-500">
@@ -168,7 +204,7 @@ export default function CocinaPage() {
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {pedidos.map(pedido => {
+        {pedidosMostrados.map(pedido => {
           const itemsPedido = (pedido.items as unknown as ItemPlato[]) ?? []
 
           // El timer parte desde el ítem añadido MÁS RECIENTEMENTE

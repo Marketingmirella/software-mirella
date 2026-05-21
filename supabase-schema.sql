@@ -182,3 +182,18 @@ INSERT INTO categorias (nombre, orden) VALUES
   ('Entradas', 3),
   ('Bebidas', 4),
   ('Postres', 5);
+
+-- ─── CONFIGURACIÓN DEL SISTEMA ───────────────────────────────
+-- Ejecutar este bloque si ya tienes el schema anterior desplegado
+CREATE TABLE IF NOT EXISTS configuracion (
+  clave TEXT PRIMARY KEY,
+  valor TEXT NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+INSERT INTO configuracion (clave, valor) VALUES
+  ('bloqueo_cocina_activo',   'false'),
+  ('bloqueo_cocina_cantidad', '3')
+ON CONFLICT (clave) DO NOTHING;
+
+ALTER PUBLICATION supabase_realtime ADD TABLE configuracion;

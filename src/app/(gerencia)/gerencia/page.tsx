@@ -7,7 +7,7 @@ import {
   BarChart3, TrendingUp, Users, DollarSign, Clock, ChefHat,
   Plus, X, Play, Square, MapPin, CheckCircle, Banknote,
   Pencil, Trash2, UtensilsCrossed, Timer, UserCircle, Search, Bike,
-  Download, SlidersHorizontal, CalendarDays, Settings
+  Download, SlidersHorizontal, CalendarDays, Settings, Lock
 } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -41,7 +41,7 @@ interface Plato {
 }
 
 type MetodoPago = 'efectivo' | 'nequi' | 'daviplata' | 'bancolombia'
-type Seccion = 'mesas' | 'carta' | 'resumen' | 'tiempos' | 'caja' | 'usuarios' | 'clientes'
+type Seccion = 'mesas' | 'carta' | 'resumen' | 'tiempos' | 'caja' | 'usuarios' | 'clientes' | 'permisos'
 type RangoResumen = 'hoy' | 'semana' | 'mes' | 'personalizado'
 
 const METODOS: { id: MetodoPago; label: string; color: string; emoji: string }[] = [
@@ -121,6 +121,11 @@ export default function GerenciaPage() {
   const [cargandoClientes, setCargandoClientes] = useState(false)
   const [ordenClientes, setOrdenClientes] = useState<'mayor_consumo' | 'menor_consumo' | 'az' | 'cumpleanos'>('mayor_consumo')
   const [filtroMesCumple, setFiltroMesCumple] = useState<number>(0) // 0 = todos los meses
+
+  // Permisos / configuración cocina
+  const [bloqueoActivo, setBloqueoActivo] = useState(false)
+  const [bloqueoCantidad, setBloqueoCantidad] = useState(3)
+  const [guardandoPermisos, setGuardandoPermisos] = useState(false)
 
   // Gestión de zonas y mesas
   const [modoGestionMesas, setModoGestionMesas] = useState(false)
@@ -292,6 +297,30 @@ export default function GerenciaPage() {
     })))
     setCargandoClientes(false)
   }, [supabase])
+
+  // ── CARGAR / GUARDAR CONFIGURACIÓN ──────────────────────────
+  const cargarConfiguracion = useCallback(async () => {
+    const { data } = await supabase
+      .from('configuracion')
+      .select('clave, valor')
+      .in('clave', ['bloqueo_cocina_activo', 'bloqueo_cocina_cantidad'])
+    if (data) {
+      const cfg: Record<string, string> = {}
+      data.forEach((r: { clave: string; valor: string }) => { cfg[r.clave] = r.valor })
+      if ('bloqueo_cocina_activo' in cfg) setBloqueoActivo(cfg['bloqueo_cocina_activo'] === 'true')
+      if ('bloqueo_cocina_cantidad' in cfg) setBloqueoCantidad(parseInt(cfg['bloqueo_cocina_cantidad']) || 3)
+    }
+  }, [supabase])
+
+  async function guardarConfiguracion() {
+    setGuardandoPermisos(true)
+    await supabase.from('configuracion').upsert([
+      { clave: 'bloqueo_cocina_activo',   valor: String(bloqueoActivo)   },
+      { clave: 'bloqueo_cocina_cantidad', valor: String(bloqueoCantidad) },
+    ], { onConflict: 'clave' })
+    toast.success('✅ Permisos guardados')
+    setGuardandoPermisos(false)
+  }
 
   async function abrirClienteDetalle(cliente: ClienteStat) {
     const { data } = await supabase.from('pedidos')
@@ -482,12 +511,14 @@ export default function GerenciaPage() {
   useEffect(() => {
     cargarDatos(); cargarMesas(); cargarCarta()
     cargarResumen(hoyStr, hoyStr)
+    cargarConfiguracion()
     const canal = supabase.channel('gerencia-rt')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'pedidos' }, () => { cargarDatos(); cargarMesas() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'mesas' }, cargarMesas)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'configuracion' }, cargarConfiguracion)
       .subscribe()
     return () => { supabase.removeChannel(canal) }
-  }, [cargarDatos, cargarMesas, cargarCarta, cargarResumen, supabase, hoyStr])
+  }, [cargarDatos, cargarMesas, cargarCarta, cargarResumen, cargarConfiguracion, supabase, hoyStr])
 
   // Cargar resumen de inventario al abrir modal cerrar turno
   useEffect(() => {
@@ -948,6 +979,7 @@ export default function GerenciaPage() {
     { id: 'clientes', label: 'Clientes', icon: <UserCircle size={16} />      },
     { id: 'caja',     label: 'Caja',     icon: <DollarSign size={16} />      },
     { id: 'usuarios', label: 'Usuarios', icon: <Plus size={16} />            },
+    { id: 'permisos', label: 'Permisos', icon: <Lock size={16} />            },
   ]
 
   return (
@@ -1919,6 +1951,76 @@ export default function GerenciaPage() {
             )}
           </div>
         )}
+        {/* ══ PERMISOS ════════════════════════════════════════════ */}
+        {seccion === 'permisos' && (
+          <div className="space-y-4">
+            <div className="bg-white rounded-2xl border border-gray-100 p-5 space-y-5">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-purple-100 rounded-xl flex items-center justify-center">
+                  <Lock size={20} className="text-purple-600" />
+                </div>
+                <div>
+                  <h2 className="font-bold text-gray-900">Control de flujo — Cocina</h2>
+                  <p className="text-xs text-gray-400">Regula cuántos pedidos ve la cocina a la vez</p>
+                </div>
+              </div>
+
+              {/* Toggle bloqueo */}
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex-1">
+                  <p className="font-semibold text-gray-800 text-sm">Bloqueo de comandas</p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    La cocina solo verá un lote de pedidos a la vez, en estricto orden de llegada
+                  </p>
+                </div>
+                <button
+                  onClick={() => setBloqueoActivo(v => !v)}
+                  className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors ${bloqueoActivo ? 'bg-purple-600' : 'bg-gray-300'}`}>
+                  <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${bloqueoActivo ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
+              </div>
+
+              {/* Cantidad de comandas por lote */}
+              {bloqueoActivo && (
+                <div>
+                  <p className="font-semibold text-gray-800 text-sm mb-1">Comandas por lote</p>
+                  <p className="text-xs text-gray-400 mb-3">
+                    Cuántos pedidos puede ver cocina al mismo tiempo antes de que aparezca el siguiente
+                  </p>
+                  <div className="flex gap-2">
+                    {[2, 3, 4, 5].map(n => (
+                      <button key={n} onClick={() => setBloqueoCantidad(n)}
+                        className={`flex-1 py-3 rounded-xl font-black text-lg transition-all border-2 ${bloqueoCantidad === n ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-700 border-gray-200 hover:border-purple-400'}`}>
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-3 bg-purple-50 border border-purple-100 rounded-xl p-3">
+                    <p className="text-xs text-purple-700 leading-relaxed">
+                      🔒 Cocina verá solo los primeros <b>{bloqueoCantidad} pedido{bloqueoCantidad !== 1 ? 's' : ''}</b> (por orden de llegada). Los siguientes aparecen conforme esos queden listos.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {!bloqueoActivo && (
+                <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
+                  <p className="text-xs text-gray-500">
+                    🟢 Sin restricción — la cocina ve todos los pedidos activos al mismo tiempo.
+                  </p>
+                </div>
+              )}
+
+              <button
+                onClick={guardarConfiguracion}
+                disabled={guardandoPermisos}
+                className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 text-white font-bold py-3 rounded-xl transition-colors">
+                {guardandoPermisos ? 'Guardando...' : '💾 Guardar configuración'}
+              </button>
+            </div>
+          </div>
+        )}
+
       </div>
 
       {/* ══ MODAL DETALLE MESA ══════════════════════════════════════ */}
