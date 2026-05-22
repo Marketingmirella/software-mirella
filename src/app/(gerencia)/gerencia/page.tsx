@@ -144,6 +144,7 @@ export default function GerenciaPage() {
   const [nuevaMesaNumero, setNuevaMesaNumero] = useState('')
   const [guardandoMesa, setGuardandoMesa] = useState(false)
   const [modalQR, setModalQR] = useState<{ id: number; numero: number; zona: string | null } | null>(null)
+  const [modalQRDomi, setModalQRDomi] = useState(false)
 
   // Carta
   const [categorias, setCategorias] = useState<Categoria[]>([])
@@ -1105,20 +1106,26 @@ export default function GerenciaPage() {
         {seccion === 'mesas' && (
           <div>
             {/* Header: leyenda + botón gestionar */}
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center justify-between mb-4 gap-2">
               {!modoGestionMesas ? (
                 <div className="flex gap-3 text-xs flex-wrap">
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-gray-200 inline-block" /> Libre</span>
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-orange-400 inline-block" /> Ocupada</span>
-                  <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-yellow-400 inline-block" /> Esperando pago</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-yellow-400 inline-block" /> Cobrando</span>
                 </div>
               ) : (
                 <p className="text-sm font-bold text-purple-700">Modo gestión de mesas</p>
               )}
-              <button onClick={() => setModoGestionMesas(g => !g)}
-                className={`text-xs font-bold px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition-colors ${modoGestionMesas ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-                <Settings size={13} /> {modoGestionMesas ? 'Salir' : 'Gestionar'}
-              </button>
+              <div className="flex gap-2 shrink-0">
+                <button onClick={() => setModalQRDomi(true)}
+                  className="text-xs font-bold px-3 py-1.5 rounded-xl flex items-center gap-1.5 bg-blue-600 text-white hover:bg-blue-700 transition-colors">
+                  📱 QR Domi
+                </button>
+                <button onClick={() => setModoGestionMesas(g => !g)}
+                  className={`text-xs font-bold px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition-colors ${modoGestionMesas ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                  <Settings size={13} /> {modoGestionMesas ? 'Salir' : 'Gestionar'}
+                </button>
+              </div>
             </div>
 
             {modoGestionMesas ? (
@@ -2930,6 +2937,50 @@ export default function GerenciaPage() {
           </div>
         </div>
       )}
+
+      {/* ══ MODAL QR DOMI ════════════════════════════════════════════ */}
+      {modalQRDomi && (() => {
+        const url = `${typeof window !== 'undefined' ? window.location.origin : ''}/domi-pedido`
+        const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(url)}&bgcolor=ffffff&color=1a1a1a&margin=2`
+        return (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-3xl p-6 w-full max-w-xs fade-in text-center space-y-4 shadow-2xl">
+              <div className="flex justify-between items-center">
+                <div className="text-left">
+                  <p className="font-black text-gray-900 text-lg">🛵 QR Domicilios</p>
+                  <p className="text-xs text-gray-400">Para que los clientes pidan en línea</p>
+                </div>
+                <button onClick={() => setModalQRDomi(false)}><X size={20} className="text-gray-400" /></button>
+              </div>
+
+              <div className="bg-blue-50 rounded-2xl p-4">
+                <img src={qrSrc} alt="QR Domi" className="mx-auto rounded-xl" width={210} height={210} />
+              </div>
+
+              <div className="bg-gray-50 rounded-xl px-3 py-2 text-left space-y-1">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">URL del pedido</p>
+                <p className="text-xs text-gray-700 break-all font-mono">{url}</p>
+              </div>
+
+              <div className="bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 text-xs text-blue-700 text-left leading-relaxed">
+                💡 <strong>Sesiones independientes:</strong> cada cliente que escanee el mismo QR tendrá su propio pedido separado — no se mezclan.
+              </div>
+
+              <button
+                onClick={() => {
+                  const a = document.createElement('a')
+                  a.href = qrSrc
+                  a.download = 'QR-Domi-Pedido.png'
+                  a.click()
+                }}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl text-sm transition-colors"
+              >
+                ⬇️ Descargar QR
+              </button>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ── Modal editar usuario ── */}
       {editandoUsuario && (
