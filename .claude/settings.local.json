@@ -12,7 +12,17 @@
       "Bash(git push *)",
       "Bash(git commit -m 'fix: better error reporting in crear-usuario API route *)",
       "Bash(git commit -m 'fix: exclude /api/ routes from auth middleware redirect *)",
-      "Bash(git commit -m 'feat: user management — change password, disable/enable, delete *)"
+      "Bash(git commit -m 'feat: user management — change password, disable/enable, delete *)",
+      "Bash(git commit -m 'feat: turn menu templates, fix inventory display per role, fix trigger dedup *)",
+      "Bash(git commit -m 'feat: add domi QR code modal in mesas section *)",
+      "Bash(npm run *)",
+      "Bash(npx next *)",
+      "PowerShell(Get-ChildItem \"C:\\\\Program Files\\\\nodejs\" -ErrorAction SilentlyContinue | Select-Object Name; Get-ChildItem \"$env:APPDATA\\\\npm\" -ErrorAction SilentlyContinue | Select-Object Name -First 5; Get-ChildItem \"$env:LOCALAPPDATA\\\\Programs\\\\nodejs\" -ErrorAction SilentlyContinue | Select-Object Name -First 5)",
+      "Bash(gh run *)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(git commit -m 'fix: bypass ESLint/TS build errors blocking Vercel deploy, remove unnecessary async *)",
+      "Bash(git remote *)",
+      "Bash(git commit *)"
     ]
   }
 }

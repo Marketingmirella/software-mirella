@@ -1,368 +1,332 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import toast from 'react-hot-toast'
 import { useRouter } from 'next/navigation'
-import { Plus, X, ChevronRight, Check } from 'lucide-react'
 
-const PASOS = ['Tu negocio', 'Zonas y mesas', 'Tu equipo', 'La carta', '¡Listo!']
+const PASOS = ['Bienvenida', 'Zonas y mesas', 'Tu equipo', 'Tu carta', '¡Listo!']
 
 export default function OnboardingPage() {
   const supabase = createClient()
   const router = useRouter()
   const [paso, setPaso] = useState(0)
   const [negocioId, setNegocioId] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
+  const [negocioNombre, setNegocioNombre] = useState('')
+  const [nombreEdit, setNombreEdit] = useState('')
+  const [guardando, setGuardando] = useState(false)
 
-  // Paso 1
-  const [nombreNegocio, setNombreNegocio] = useState('')
-  // Paso 2
-  const [zonas, setZonas] = useState<{ nombre: string; mesas: string[] }[]>([{ nombre: 'Salón principal', mesas: ['1', '2', '3'] }])
-  // Paso 3
-  const [usuarios, setUsuarios] = useState<{ nombre: string; email: string; password: string; rol: string }[]>([])
-  const [nuevoUser, setNuevoUser] = useState({ nombre: '', email: '', password: '', rol: 'mesera' })
-  // Paso 4
-  const [categorias, setCategorias] = useState<{ nombre: string }[]>([])
-  const [platos, setPlatos] = useState<{ nombre: string; precio: string; categoria: string }[]>([])
-  const [nuevoPlato, setNuevoPlato] = useState({ nombre: '', precio: '', categoria: '' })
+  // Zonas y mesas
+  const [zona, setZona] = useState('Salón principal')
+  const [mesas, setMesas] = useState('5')
+  const [mesasCreadas, setMesasCreadas] = useState(false)
 
-  const cargar = useCallback(async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) { router.push('/login'); return }
-    const { data: u } = await supabase.from('usuarios').select('negocio_id, negocio:negocios(nombre, onboarding_completo)').eq('id', user.id).single()
-    if (!u?.negocio_id) { router.push('/login'); return }
-    const neg = u.negocio as { nombre: string; onboarding_completo: boolean } | null
-    if (neg?.onboarding_completo) { router.push('/'); return }
-    setNegocioId(u.negocio_id)
-    setNombreNegocio(neg?.nombre || '')
-    const { data: cats } = await supabase.from('categorias').select('nombre').eq('negocio_id', u.negocio_id)
-    if (cats) setCategorias(cats)
-  }, [supabase, router])
+  // Equipo
+  const [usuarios, setUsuarios] = useState([{ nombre: '', email: '', password: '', rol: 'mesera' as 'mesera' | 'cocina' }])
 
-  useEffect(() => { cargar() }, [cargar])
+  // Carta
+  const [categorias, setCategorias] = useState<{ id: number; nombre: string }[]>([])
+  const [platos, setPlatos] = useState([{ nombre: '', precio: '', categoria_id: '' }])
 
-  // ── Guardar paso 1 ──
-  async function guardarNegocio() {
-    if (!nombreNegocio.trim() || !negocioId) return
-    setSaving(true)
-    await supabase.from('negocios').update({ nombre: nombreNegocio.trim() }).eq('id', negocioId)
-    setSaving(false); setPaso(1)
-  }
+  useEffect(() => {
+    supabase.auth.getUser().then(async ({ data }) => {
+      if (!data.user) { router.push('/login'); return }
+      const { data: u } = await supabase.from('usuarios')
+        .select('negocio_id, negocio:negocios(id, nombre, onboarding_completo)')
+        .eq('id', data.user.id).single()
+      if (!u) { router.push('/login'); return }
+      const neg = u.negocio as { id: string; nombre: string; onboarding_completo: boolean } | null
+      if (neg?.onboarding_completo) { router.push('/gerencia'); return }
+      setNegocioId(u.negocio_id)
+      setNegocioNombre(neg?.nombre || '')
+      setNombreEdit(neg?.nombre || '')
+    })
+  }, [])
 
-  // ── Guardar paso 2 ──
-  async function guardarMesas() {
-    setSaving(true)
-    for (const zona of zonas) {
-      for (const num of zona.mesas) {
-        const n = parseInt(num)
-        if (!isNaN(n) && n > 0) {
-          await supabase.from('mesas').insert({ numero: n, zona: zona.nombre, estado: 'libre', negocio_id: negocioId }).select()
-        }
-      }
+  useEffect(() => {
+    if (paso === 3 && negocioId) {
+      supabase.from('categorias').select('id, nombre').eq('negocio_id', negocioId).order('orden')
+        .then(({ data }) => { if (data) setCategorias(data) })
     }
-    setSaving(false); setPaso(2)
+  }, [paso, negocioId])
+
+  async function guardarNombre() {
+    if (!negocioId || !nombreEdit.trim()) return
+    setGuardando(true)
+    await supabase.from('negocios').update({ nombre: nombreEdit.trim() }).eq('id', negocioId)
+    setNegocioNombre(nombreEdit.trim())
+    setGuardando(false)
+    setPaso(1)
   }
 
-  // ── Guardar paso 3 ──
-  async function guardarUsuarios() {
-    setSaving(true)
-    for (const u of usuarios) {
+  async function crearMesas() {
+    if (!negocioId || !zona.trim()) { toast.error('Escribe el nombre de la zona'); return }
+    const cant = parseInt(mesas)
+    if (isNaN(cant) || cant < 1 || cant > 50) { toast.error('Número de mesas inválido (1-50)'); return }
+    setGuardando(true)
+    const filas = Array.from({ length: cant }, (_, i) => ({ negocio_id: negocioId, numero: i + 1, zona: zona.trim() }))
+    const { error } = await supabase.from('mesas').insert(filas)
+    if (error) { toast.error('Error: ' + error.message); setGuardando(false); return }
+    toast.success(`✅ ${cant} mesas creadas en "${zona.trim()}"`)
+    setMesasCreadas(true)
+    setGuardando(false)
+  }
+
+  async function crearUsuarios() {
+    setGuardando(true)
+    const validos = usuarios.filter(u => u.nombre.trim() && u.email.trim() && u.password.trim())
+    for (const u of validos) {
       await fetch('/api/crear-usuario', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...u, negocio_id: negocioId }),
       })
     }
-    setSaving(false); setPaso(3)
+    setGuardando(false)
+    setPaso(3)
   }
 
-  // ── Guardar paso 4 ──
-  async function guardarCarta() {
-    setSaving(true)
-    // Asegurar categorías
-    const catsExistentes = categorias.map(c => c.nombre)
-    const catsNuevas = [...new Set(platos.map(p => p.categoria).filter(c => c && !catsExistentes.includes(c)))]
-    let catMap: Record<string, number> = {}
-    const { data: allCats } = await supabase.from('categorias').select('id, nombre').eq('negocio_id', negocioId!)
-    if (allCats) allCats.forEach((c: { id: number; nombre: string }) => { catMap[c.nombre] = c.id })
-    for (const nombre of catsNuevas) {
-      const { data } = await supabase.from('categorias').insert({ nombre, orden: Object.keys(catMap).length + 1, negocio_id: negocioId }).select('id').single()
-      if (data) catMap[nombre] = data.id
-    }
-    // Insertar platos
-    for (const p of platos) {
-      const catId = catMap[p.categoria]
-      if (!catId || !p.nombre || !p.precio) continue
-      const { data: pl } = await supabase.from('platos').insert({
-        nombre: p.nombre, precio: parseFloat(p.precio), categoria_id: catId,
-        activo: true, negocio_id: negocioId,
-      }).select('id').single()
-      if (pl) await supabase.from('inventario').insert({ plato_id: pl.id, cantidad_disponible: 0, alerta_minima: 3 })
-    }
-    setSaving(false); setPaso(4)
-  }
-
-  // ── Finalizar ──
-  async function finalizar() {
+  async function crearPlatos() {
     if (!negocioId) return
-    setSaving(true)
+    setGuardando(true)
+    const validos = platos.filter(p => p.nombre.trim() && p.precio && p.categoria_id)
+    if (validos.length > 0) {
+      await supabase.from('platos').insert(
+        validos.map(p => ({
+          negocio_id: negocioId,
+          nombre: p.nombre.trim(),
+          precio: parseFloat(p.precio),
+          categoria_id: parseInt(p.categoria_id),
+          activo: true,
+        }))
+      )
+    }
+    setGuardando(false)
+    setPaso(4)
+  }
+
+  async function finalizarOnboarding() {
+    if (!negocioId) return
     await supabase.from('negocios').update({ onboarding_completo: true }).eq('id', negocioId)
-    setSaving(false)
-    router.push('/')
+    toast.success('¡Tu restaurante está listo! 🎉')
+    router.push('/gerencia')
   }
 
   const progreso = Math.round((paso / (PASOS.length - 1)) * 100)
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-50 to-indigo-50 flex flex-col items-center justify-center p-4">
-      <div className="w-full max-w-lg">
-        {/* Header */}
-        <div className="text-center mb-6">
-          <div className="w-12 h-12 bg-purple-600 rounded-2xl flex items-center justify-center mx-auto mb-3">
-            <span className="text-xl">🍽️</span>
-          </div>
-          <h1 className="font-black text-2xl text-gray-900">Configura tu restaurante</h1>
-          <p className="text-sm text-gray-500 mt-1">Paso {paso + 1} de {PASOS.length}</p>
-        </div>
-
-        {/* Progreso */}
-        <div className="flex items-center justify-between mb-6 px-1">
-          {PASOS.map((p, i) => (
-            <div key={i} className="flex items-center flex-1">
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-black shrink-0 transition-all ${
-                i < paso ? 'bg-green-500 text-white' : i === paso ? 'bg-purple-600 text-white' : 'bg-gray-200 text-gray-400'
-              }`}>
-                {i < paso ? <Check size={14} /> : i + 1}
-              </div>
-              {i < PASOS.length - 1 && (
-                <div className={`flex-1 h-1 mx-1 rounded-full transition-all ${i < paso ? 'bg-green-500' : 'bg-gray-200'}`} />
-              )}
+    <div className="min-h-screen bg-gray-50 flex flex-col">
+      {/* Header progreso */}
+      <div className="bg-white border-b px-4 py-4">
+        <div className="max-w-lg mx-auto">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 bg-purple-600 rounded-lg flex items-center justify-center"><span className="text-sm">🍽️</span></div>
+              <span className="font-black text-gray-900 text-sm">RestaurantOS</span>
             </div>
-          ))}
+            <span className="text-xs text-gray-400">Paso {paso + 1} de {PASOS.length}</span>
+          </div>
+          <div className="w-full bg-gray-100 rounded-full h-2">
+            <div className="bg-purple-600 h-2 rounded-full transition-all duration-500" style={{ width: `${progreso}%` }} />
+          </div>
+          <div className="flex justify-between mt-1">
+            {PASOS.map((p, i) => (
+              <span key={p} className={`text-xs font-medium ${i === paso ? 'text-purple-600' : i < paso ? 'text-green-500' : 'text-gray-300'}`}>
+                {i < paso ? '✓' : i === paso ? p : '·'}
+              </span>
+            ))}
+          </div>
         </div>
+      </div>
 
-        {/* Tarjeta */}
-        <div className="bg-white rounded-3xl shadow-lg p-6 space-y-5">
+      <div className="flex-1 flex items-start justify-center p-4 pt-8">
+        <div className="w-full max-w-lg">
 
-          {/* ── Paso 0: Nombre negocio ── */}
+          {/* ── PASO 0: Bienvenida ── */}
           {paso === 0 && (
-            <>
-              <div>
-                <h2 className="text-xl font-black text-gray-900 mb-1">¿Cómo se llama tu restaurante? 🏪</h2>
-                <p className="text-sm text-gray-400">Este nombre aparecerá en todo el sistema.</p>
+            <div className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 space-y-6">
+              <div className="text-center">
+                <div className="text-6xl mb-4">🎉</div>
+                <h1 className="text-2xl font-black text-gray-900 mb-2">¡Bienvenido a RestaurantOS!</h1>
+                <p className="text-gray-500 text-sm leading-relaxed">
+                  Vamos a configurar tu restaurante en 4 pasos rápidos. Puedes cambiar todo esto después.
+                </p>
               </div>
-              <input
-                value={nombreNegocio}
-                onChange={e => setNombreNegocio(e.target.value)}
-                placeholder="Ej: Las Delicias de Mirella"
-                className="w-full border-2 border-gray-200 focus:border-purple-400 rounded-2xl px-4 py-3.5 text-base font-semibold focus:outline-none"
-              />
-              <button onClick={guardarNegocio} disabled={saving || !nombreNegocio.trim()}
-                className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-200 text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-2">
-                {saving ? 'Guardando...' : <>Siguiente <ChevronRight size={18} /></>}
+              <div>
+                <label className="text-xs font-bold text-gray-500 uppercase tracking-wide block mb-1.5">
+                  ¿Cómo se llama tu restaurante?
+                </label>
+                <input value={nombreEdit} onChange={e => setNombreEdit(e.target.value)}
+                  placeholder="Ej: Las Delicias de Mirella"
+                  className="w-full border-2 border-gray-200 focus:border-purple-400 rounded-xl px-4 py-3 font-bold text-gray-900 focus:outline-none transition-colors" />
+              </div>
+              <button onClick={guardarNombre} disabled={!nombreEdit.trim() || guardando}
+                className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 text-white font-black py-4 rounded-2xl transition-colors flex items-center justify-center gap-2">
+                {guardando ? <><span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Guardando...</> : 'Siguiente →'}
               </button>
-            </>
+            </div>
           )}
 
-          {/* ── Paso 1: Zonas y mesas ── */}
+          {/* ── PASO 1: Zonas y mesas ── */}
           {paso === 1 && (
-            <>
+            <div className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 space-y-5">
               <div>
-                <h2 className="text-xl font-black text-gray-900 mb-1">Crea tus zonas y mesas 🪑</h2>
-                <p className="text-sm text-gray-400">Organiza tu restaurante por zonas (salón, terraza, bar…) y define las mesas de cada una.</p>
+                <h2 className="text-xl font-black text-gray-900 mb-1">🪑 Crea tus mesas</h2>
+                <p className="text-gray-500 text-sm">Define una zona y cuántas mesas tiene. Puedes agregar más zonas después desde el panel de gerencia.</p>
               </div>
-              <div className="space-y-3 max-h-56 overflow-y-auto pr-1">
-                {zonas.map((z, zi) => (
-                  <div key={zi} className="bg-gray-50 rounded-2xl p-4 space-y-2">
-                    <div className="flex items-center gap-2">
-                      <input value={z.nombre} onChange={e => setZonas(prev => prev.map((z2, i) => i === zi ? { ...z2, nombre: e.target.value } : z2))}
-                        placeholder="Nombre de la zona"
-                        className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-purple-400" />
-                      {zonas.length > 1 && (
-                        <button onClick={() => setZonas(prev => prev.filter((_, i) => i !== zi))}
-                          className="w-8 h-8 bg-red-100 hover:bg-red-200 text-red-500 rounded-xl flex items-center justify-center">
-                          <X size={14} />
-                        </button>
+              <div>
+                <label className="text-xs font-bold text-gray-500 uppercase tracking-wide block mb-1.5">Nombre de la zona</label>
+                <input value={zona} onChange={e => setZona(e.target.value)}
+                  placeholder="Ej: Salón principal, Terraza..."
+                  className="w-full border-2 border-gray-200 focus:border-purple-400 rounded-xl px-4 py-3 text-sm focus:outline-none transition-colors" />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-500 uppercase tracking-wide block mb-1.5">¿Cuántas mesas tiene?</label>
+                <input type="number" min="1" max="50" value={mesas} onChange={e => setMesas(e.target.value)}
+                  className="w-full border-2 border-gray-200 focus:border-purple-400 rounded-xl px-4 py-3 text-sm focus:outline-none transition-colors font-bold text-2xl text-center" />
+                <p className="text-xs text-gray-400 mt-1 text-center">Se crearán las mesas del 1 al {mesas || '?'}</p>
+              </div>
+              {!mesasCreadas ? (
+                <button onClick={crearMesas} disabled={guardando}
+                  className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 text-white font-black py-4 rounded-2xl transition-colors flex items-center justify-center gap-2">
+                  {guardando ? <><span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Creando...</> : '✓ Crear mesas'}
+                </button>
+              ) : (
+                <div className="space-y-3">
+                  <div className="bg-green-50 border border-green-200 rounded-2xl p-4 text-center">
+                    <p className="text-green-700 font-bold text-sm">✅ {mesas} mesas creadas en "{zona}"</p>
+                    <p className="text-xs text-green-600 mt-1">Puedes agregar más zonas desde el panel de gerencia</p>
+                  </div>
+                  <button onClick={() => setPaso(2)}
+                    className="w-full bg-purple-600 hover:bg-purple-700 text-white font-black py-4 rounded-2xl transition-colors">
+                    Siguiente →
+                  </button>
+                </div>
+              )}
+              <button onClick={() => setPaso(2)} className="w-full text-gray-400 text-sm py-1 hover:text-gray-600">
+                Saltar este paso →
+              </button>
+            </div>
+          )}
+
+          {/* ── PASO 2: Equipo ── */}
+          {paso === 2 && (
+            <div className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 space-y-5">
+              <div>
+                <h2 className="text-xl font-black text-gray-900 mb-1">👥 Agrega tu equipo</h2>
+                <p className="text-gray-500 text-sm">Tus meseras y cocineros tendrán sus propios accesos. Puedes agregar más usuarios después.</p>
+              </div>
+              <div className="space-y-4">
+                {usuarios.map((u, i) => (
+                  <div key={i} className="bg-gray-50 rounded-2xl p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-gray-500 uppercase">Usuario {i + 1}</span>
+                      {i > 0 && (
+                        <button onClick={() => setUsuarios(p => p.filter((_, j) => j !== i))}
+                          className="text-xs text-red-400 hover:text-red-600">Quitar</button>
                       )}
                     </div>
-                    <p className="text-xs text-gray-400 font-medium">Números de mesa (separados por coma):</p>
-                    <input
-                      value={z.mesas.join(', ')}
-                      onChange={e => setZonas(prev => prev.map((z2, i) => i === zi ? { ...z2, mesas: e.target.value.split(',').map(s => s.trim()) } : z2))}
-                      placeholder="1, 2, 3, 4, 5"
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
+                    <div className="grid grid-cols-2 gap-2">
+                      <input placeholder="Nombre" value={u.nombre} onChange={e => setUsuarios(p => p.map((x, j) => j === i ? { ...x, nombre: e.target.value } : x))}
+                        className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 bg-white" />
+                      <select value={u.rol} onChange={e => setUsuarios(p => p.map((x, j) => j === i ? { ...x, rol: e.target.value as 'mesera' | 'cocina' } : x))}
+                        className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 bg-white">
+                        <option value="mesera">Mesera</option>
+                        <option value="cocina">Cocina</option>
+                      </select>
+                    </div>
+                    <input type="email" placeholder="Correo" value={u.email} onChange={e => setUsuarios(p => p.map((x, j) => j === i ? { ...x, email: e.target.value } : x))}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 bg-white" />
+                    <input type="password" placeholder="Contraseña" value={u.password} onChange={e => setUsuarios(p => p.map((x, j) => j === i ? { ...x, password: e.target.value } : x))}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 bg-white" />
                   </div>
                 ))}
               </div>
-              <button onClick={() => setZonas(prev => [...prev, { nombre: '', mesas: [] }])}
-                className="w-full border-2 border-dashed border-purple-300 text-purple-600 font-bold py-3 rounded-2xl flex items-center justify-center gap-2 hover:bg-purple-50">
-                <Plus size={16} /> Agregar zona
+              <button onClick={() => setUsuarios(p => [...p, { nombre: '', email: '', password: '', rol: 'mesera' }])}
+                className="w-full border-2 border-dashed border-gray-200 hover:border-purple-400 text-gray-400 hover:text-purple-600 font-bold py-3 rounded-2xl text-sm transition-colors">
+                + Agregar otro usuario
               </button>
-              <div className="grid grid-cols-2 gap-3">
-                <button onClick={() => setPaso(0)} className="bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold py-3 rounded-2xl">← Atrás</button>
-                <button onClick={guardarMesas} disabled={saving}
-                  className="bg-purple-600 hover:bg-purple-700 disabled:bg-gray-200 text-white font-bold py-3 rounded-2xl flex items-center justify-center gap-2">
-                  {saving ? 'Guardando...' : <>Siguiente <ChevronRight size={16} /></>}
-                </button>
-              </div>
-              <button onClick={() => setPaso(2)} className="w-full text-gray-400 text-sm hover:text-gray-600 text-center">Saltar este paso →</button>
-            </>
+              <button onClick={crearUsuarios} disabled={guardando}
+                className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 text-white font-black py-4 rounded-2xl transition-colors flex items-center justify-center gap-2">
+                {guardando ? <><span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Creando usuarios...</> : 'Siguiente →'}
+              </button>
+              <button onClick={() => setPaso(3)} className="w-full text-gray-400 text-sm py-1 hover:text-gray-600">
+                Saltar — agregar usuarios después →
+              </button>
+            </div>
           )}
 
-          {/* ── Paso 2: Equipo ── */}
-          {paso === 2 && (
-            <>
-              <div>
-                <h2 className="text-xl font-black text-gray-900 mb-1">Agrega tu equipo 👥</h2>
-                <p className="text-sm text-gray-400">Crea cuentas para tus meseras, cocineros y demás personal.</p>
-              </div>
-              {usuarios.length > 0 && (
-                <div className="space-y-2 max-h-40 overflow-y-auto">
-                  {usuarios.map((u, i) => (
-                    <div key={i} className="flex items-center justify-between bg-green-50 border border-green-200 rounded-xl px-3 py-2.5">
-                      <div>
-                        <p className="text-sm font-semibold text-gray-900">{u.nombre}</p>
-                        <p className="text-xs text-gray-500 capitalize">{u.rol} · {u.email}</p>
-                      </div>
-                      <button onClick={() => setUsuarios(p => p.filter((_, j) => j !== i))}
-                        className="w-7 h-7 bg-red-100 hover:bg-red-200 text-red-500 rounded-lg flex items-center justify-center">
-                        <X size={12} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <div className="bg-gray-50 rounded-2xl p-4 space-y-3">
-                <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Nuevo miembro</p>
-                <div className="grid grid-cols-2 gap-2">
-                  <input placeholder="Nombre" value={nuevoUser.nombre} onChange={e => setNuevoUser(p => ({ ...p, nombre: e.target.value }))}
-                    className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
-                  <select value={nuevoUser.rol} onChange={e => setNuevoUser(p => ({ ...p, rol: e.target.value }))}
-                    className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400">
-                    <option value="mesera">Mesera</option>
-                    <option value="cocina">Cocina</option>
-                    <option value="domi">Domi</option>
-                  </select>
-                </div>
-                <input type="email" placeholder="Correo" value={nuevoUser.email} onChange={e => setNuevoUser(p => ({ ...p, email: e.target.value }))}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
-                <input type="password" placeholder="Contraseña" value={nuevoUser.password} onChange={e => setNuevoUser(p => ({ ...p, password: e.target.value }))}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
-                <button
-                  onClick={() => {
-                    if (!nuevoUser.nombre || !nuevoUser.email || !nuevoUser.password) return
-                    setUsuarios(p => [...p, { ...nuevoUser }])
-                    setNuevoUser({ nombre: '', email: '', password: '', rol: 'mesera' })
-                  }}
-                  className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-2.5 rounded-xl flex items-center justify-center gap-2">
-                  <Plus size={14} /> Agregar
-                </button>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <button onClick={() => setPaso(1)} className="bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold py-3 rounded-2xl">← Atrás</button>
-                <button onClick={guardarUsuarios} disabled={saving}
-                  className="bg-purple-600 hover:bg-purple-700 disabled:bg-gray-200 text-white font-bold py-3 rounded-2xl flex items-center justify-center gap-2">
-                  {saving ? 'Guardando...' : <>Siguiente <ChevronRight size={16} /></>}
-                </button>
-              </div>
-              <button onClick={() => setPaso(3)} className="w-full text-gray-400 text-sm hover:text-gray-600 text-center">Saltar este paso →</button>
-            </>
-          )}
-
-          {/* ── Paso 3: Carta ── */}
+          {/* ── PASO 3: Carta ── */}
           {paso === 3 && (
-            <>
+            <div className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 space-y-5">
               <div>
-                <h2 className="text-xl font-black text-gray-900 mb-1">Agrega tus primeros platos 🍽️</h2>
-                <p className="text-sm text-gray-400">Puedes agregar más desde el panel de Carta cuando quieras.</p>
+                <h2 className="text-xl font-black text-gray-900 mb-1">🍽️ Primeros platos</h2>
+                <p className="text-gray-500 text-sm">Agrega algunos platos para arrancar. Puedes completar la carta desde el panel después.</p>
               </div>
-              {platos.length > 0 && (
-                <div className="space-y-1.5 max-h-36 overflow-y-auto">
-                  {platos.map((p, i) => (
-                    <div key={i} className="flex items-center justify-between bg-orange-50 border border-orange-200 rounded-xl px-3 py-2">
-                      <div>
-                        <p className="text-sm font-semibold text-gray-900">{p.nombre}</p>
-                        <p className="text-xs text-gray-500">{p.categoria} · ${parseFloat(p.precio || '0').toLocaleString('es-CO')}</p>
-                      </div>
-                      <button onClick={() => setPlatos(prev => prev.filter((_, j) => j !== i))}
-                        className="w-7 h-7 bg-red-100 hover:bg-red-200 text-red-500 rounded-lg flex items-center justify-center">
-                        <X size={12} />
-                      </button>
+              <div className="space-y-3">
+                {platos.map((p, i) => (
+                  <div key={i} className="bg-gray-50 rounded-2xl p-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-gray-400">Plato {i + 1}</span>
+                      {i > 0 && <button onClick={() => setPlatos(prev => prev.filter((_, j) => j !== i))} className="text-xs text-red-400">Quitar</button>}
                     </div>
-                  ))}
-                </div>
-              )}
-              <div className="bg-gray-50 rounded-2xl p-4 space-y-3">
-                <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Nuevo plato</p>
-                <div className="grid grid-cols-2 gap-2">
-                  <input placeholder="Nombre del plato" value={nuevoPlato.nombre} onChange={e => setNuevoPlato(p => ({ ...p, nombre: e.target.value }))}
-                    className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
-                  <input type="number" placeholder="Precio $" value={nuevoPlato.precio} onChange={e => setNuevoPlato(p => ({ ...p, precio: e.target.value }))}
-                    className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
-                </div>
-                <select value={nuevoPlato.categoria} onChange={e => setNuevoPlato(p => ({ ...p, categoria: e.target.value }))}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400">
-                  <option value="">— Categoría —</option>
-                  {categorias.map((c, i) => <option key={i} value={c.nombre}>{c.nombre}</option>)}
-                </select>
-                <button
-                  onClick={() => {
-                    if (!nuevoPlato.nombre || !nuevoPlato.precio || !nuevoPlato.categoria) return
-                    setPlatos(p => [...p, { ...nuevoPlato }])
-                    setNuevoPlato({ nombre: '', precio: '', categoria: '' })
-                  }}
-                  className="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-2.5 rounded-xl flex items-center justify-center gap-2">
-                  <Plus size={14} /> Agregar plato
-                </button>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input placeholder="Nombre del plato" value={p.nombre} onChange={e => setPlatos(prev => prev.map((x, j) => j === i ? { ...x, nombre: e.target.value } : x))}
+                        className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 bg-white" />
+                      <input type="number" placeholder="Precio $" value={p.precio} onChange={e => setPlatos(prev => prev.map((x, j) => j === i ? { ...x, precio: e.target.value } : x))}
+                        className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 bg-white" />
+                    </div>
+                    <select value={p.categoria_id} onChange={e => setPlatos(prev => prev.map((x, j) => j === i ? { ...x, categoria_id: e.target.value } : x))}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 bg-white">
+                      <option value="">Selecciona categoría</option>
+                      {categorias.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                    </select>
+                  </div>
+                ))}
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <button onClick={() => setPaso(2)} className="bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold py-3 rounded-2xl">← Atrás</button>
-                <button onClick={guardarCarta} disabled={saving}
-                  className="bg-purple-600 hover:bg-purple-700 disabled:bg-gray-200 text-white font-bold py-3 rounded-2xl flex items-center justify-center gap-2">
-                  {saving ? 'Guardando...' : <>Siguiente <ChevronRight size={16} /></>}
-                </button>
-              </div>
-              <button onClick={() => setPaso(4)} className="w-full text-gray-400 text-sm hover:text-gray-600 text-center">Saltar este paso →</button>
-            </>
+              <button onClick={() => setPlatos(p => [...p, { nombre: '', precio: '', categoria_id: '' }])}
+                className="w-full border-2 border-dashed border-gray-200 hover:border-purple-400 text-gray-400 hover:text-purple-600 font-bold py-3 rounded-2xl text-sm transition-colors">
+                + Agregar otro plato
+              </button>
+              <button onClick={crearPlatos} disabled={guardando}
+                className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 text-white font-black py-4 rounded-2xl transition-colors flex items-center justify-center gap-2">
+                {guardando ? <><span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Guardando...</> : 'Siguiente →'}
+              </button>
+              <button onClick={() => setPaso(4)} className="w-full text-gray-400 text-sm py-1 hover:text-gray-600">
+                Saltar — completar carta después →
+              </button>
+            </div>
           )}
 
-          {/* ── Paso 4: ¡Listo! ── */}
+          {/* ── PASO 4: Listo ── */}
           {paso === 4 && (
-            <>
-              <div className="text-center space-y-3 py-4">
-                <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto">
-                  <span className="text-4xl">🎉</span>
-                </div>
-                <h2 className="text-2xl font-black text-gray-900">¡Tu restaurante está listo!</h2>
+            <div className="bg-white rounded-3xl p-8 shadow-sm border border-gray-100 space-y-6 text-center">
+              <div>
+                <div className="text-7xl mb-4">🎉</div>
+                <h2 className="text-2xl font-black text-gray-900 mb-2">¡{negocioNombre} está listo!</h2>
                 <p className="text-gray-500 text-sm leading-relaxed">
-                  Configuraste <strong>{nombreNegocio}</strong> con éxito. Ahora puedes empezar a tomar pedidos, gestionar tu cocina y mucho más.
+                  Tu restaurante está configurado y listo para operar. Desde el panel de gerencia puedes agregar más mesas, usuarios y platos.
                 </p>
               </div>
-              <div className="bg-purple-50 border border-purple-200 rounded-2xl p-4 space-y-2">
-                <p className="text-xs font-bold text-purple-700 uppercase tracking-wide">Resumen</p>
-                <div className="grid grid-cols-3 text-center gap-2">
-                  <div className="bg-white rounded-xl p-2">
-                    <p className="font-black text-gray-900 text-lg">{zonas.reduce((a, z) => a + z.mesas.filter(m => m.trim()).length, 0)}</p>
-                    <p className="text-xs text-gray-400">Mesas</p>
-                  </div>
-                  <div className="bg-white rounded-xl p-2">
-                    <p className="font-black text-gray-900 text-lg">{usuarios.length}</p>
-                    <p className="text-xs text-gray-400">Usuarios</p>
-                  </div>
-                  <div className="bg-white rounded-xl p-2">
-                    <p className="font-black text-gray-900 text-lg">{platos.length}</p>
-                    <p className="text-xs text-gray-400">Platos</p>
-                  </div>
-                </div>
+              <div className="bg-purple-50 rounded-2xl p-5 space-y-3 text-left">
+                <p className="font-bold text-gray-900 text-sm">¿Qué sigue?</p>
+                {[
+                  '🍽️ Abre tu primer turno desde Caja',
+                  '📱 Comparte el QR con tus meseras',
+                  '👨‍🍳 Activa el panel de cocina',
+                  '🛵 Configura los domicilios',
+                ].map(t => (
+                  <p key={t} className="text-sm text-gray-600 flex items-center gap-2">{t}</p>
+                ))}
               </div>
-              <button onClick={finalizar} disabled={saving}
-                className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-200 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 text-lg">
-                {saving ? 'Entrando...' : '✨ Entrar al panel →'}
+              <button onClick={finalizarOnboarding}
+                className="w-full bg-purple-600 hover:bg-purple-700 text-white font-black py-4 rounded-2xl text-lg transition-colors">
+                🚀 Ir al panel de gerencia
               </button>
-            </>
+            </div>
           )}
+
         </div>
       </div>
-      <p className="text-xs text-gray-400 mt-6">¿Necesitas ayuda? escríbenos por WhatsApp</p>
     </div>
   )
 }
