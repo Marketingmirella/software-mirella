@@ -35,6 +35,9 @@ export default function MeseraPage() {
     id: number; mesa_numero: number; plato_nombre: string; pendientes: string[]
   }[]>([])
 
+  // ID del usuario actual (para filtrar notificaciones propias)
+  const [usuarioId, setUsuarioId] = useState<string | null>(null)
+
   const supabase = createClient()
 
   const cargarDatos = useCallback(async () => {
@@ -69,6 +72,10 @@ export default function MeseraPage() {
   }, [supabase])
 
   useEffect(() => {
+    // Cargar el id del usuario actual una sola vez
+    supabase.auth.getUser().then(({ data }) => {
+      if (data?.user) setUsuarioId(data.user.id)
+    })
     cargarDatos()
     cargarPedidosListos()
     const canal = supabase.channel('mesera-realtime')
@@ -93,17 +100,20 @@ export default function MeseraPage() {
         // Usar .then() en lugar de async/await para mayor compatibilidad con realtime
         supabase
           .from('pedidos')
-          .select('tipo, mesa:mesas(numero), items:items_pedido(id, estado, plato:platos(nombre))')
+          .select('tipo, mesera_id, mesa:mesas(numero), items:items_pedido(id, estado, plato:platos(nombre))')
           .eq('id', item.pedido_id)
           .maybeSingle()
           .then(({ data: pedido }) => {
             if (!pedido) return
             const p = pedido as unknown as {
               tipo: string
+              mesera_id: string | null
               mesa: { numero: number } | null
               items: { id: string; estado: string; plato: { nombre: string } }[]
             }
             if (!p.mesa || p.tipo === 'domi') return // domicilios domi van al panel domi, no aquí
+            // Solo notificar a la mesera que hizo el pedido
+            if (p.mesera_id && usuarioId && p.mesera_id !== usuarioId) return
 
             // Identificar el plato específico que acaba de quedar listo
             const itemListo = p.items.find(i => i.id === item.id)
@@ -249,6 +259,7 @@ export default function MeseraPage() {
           cantidad: item.cantidad,
           precio_unitario: item.plato.precio,
           notas: item.notas || null,
+          pedido_por: user?.id || null,  // registrar quién agregó estos ítems
         }))
       )
       if (error) { toast.error('Error al agregar platos'); setEnviando(false); return }

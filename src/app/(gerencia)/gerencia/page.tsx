@@ -19,7 +19,7 @@ import {
 interface PlatoStat { nombre: string; cantidad: number; total: number }
 interface MeseraStat { nombre: string; pedidos: number; total: number }
 interface PedidoResumen { id: string; mesa: number; total: number; estado: string; created_at: string; pagado_en?: string | null; tipo: string; turno_id?: string | null }
-interface ItemDetalle { nombre: string; cantidad: number; precio_unitario: number; notas: string | null; estado: string }
+interface ItemDetalle { nombre: string; cantidad: number; precio_unitario: number; notas: string | null; estado: string; pedido_por_nombre?: string | null }
 interface PedidoDetalle {
   id: string; estado: string; tipo: string; created_at: string; notas: string | null
   mesa: { numero: number }; mesera: { nombre: string } | null; items: ItemDetalle[]
@@ -702,7 +702,7 @@ export default function GerenciaPage() {
     const { data: pedido } = await supabase.from('pedidos').select(`
       id, estado, tipo, created_at, notas, cliente_nombre, cliente_cedula, cliente_telefono,
       mesa:mesas(numero), mesera:usuarios(nombre),
-      items:items_pedido(estado, cantidad, precio_unitario, notas, plato:platos(nombre))
+      items:items_pedido(estado, cantidad, precio_unitario, notas, plato:platos(nombre), pedido_por_usuario:usuarios!pedido_por(nombre))
     `).eq('mesa_id', mesa.id).in('estado', ['pendiente','en_preparacion','listo','entregado','esperando_pago'])
       .order('created_at', { ascending: false }).limit(1).single()
     if (!pedido) { toast.error('No se encontró el pedido'); return }
@@ -712,8 +712,8 @@ export default function GerenciaPage() {
       ...pedido,
       mesa: (pedido.mesa as unknown as { numero: number }),
       mesera: pedido.mesera as unknown as { nombre: string } | null,
-      items: (pedido.items as unknown as { estado: string; cantidad: number; precio_unitario: number; notas: string | null; plato: { nombre: string } }[])
-        .map(i => ({ nombre: i.plato?.nombre || '', cantidad: i.cantidad, precio_unitario: i.precio_unitario, notas: i.notas, estado: i.estado })),
+      items: (pedido.items as unknown as { estado: string; cantidad: number; precio_unitario: number; notas: string | null; plato: { nombre: string }; pedido_por_usuario: { nombre: string } | null }[])
+        .map(i => ({ nombre: i.plato?.nombre || '', cantidad: i.cantidad, precio_unitario: i.precio_unitario, notas: i.notas, estado: i.estado, pedido_por_nombre: i.pedido_por_usuario?.nombre || null })),
       cliente_nombre:   p.cliente_nombre,
       cliente_cedula:   p.cliente_cedula,
       cliente_telefono: p.cliente_telefono,
@@ -2462,11 +2462,22 @@ export default function GerenciaPage() {
                     )}
                   </div>
                 ) : (
-                  <h2 className="text-xl font-black text-gray-900">Mesa {mesaDetalle.mesa?.numero}</h2>
+                  <div>
+                    <h2 className="text-xl font-black text-gray-900">Mesa {mesaDetalle.mesa?.numero}</h2>
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      {mesaDetalle.pedido.mesera ? (
+                        <span className="inline-flex items-center gap-1 bg-orange-100 text-orange-700 text-xs font-bold px-2.5 py-1 rounded-full">
+                          👩‍🍳 {mesaDetalle.pedido.mesera.nombre}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-gray-400">📱 Pedido QR</span>
+                      )}
+                      <span className="text-xs text-gray-400">{new Date(mesaDetalle.pedido.created_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}</span>
+                    </div>
+                  </div>
                 )}
-                <p className="text-xs text-gray-400 mt-0.5">
-                  {mesaDetalle.pedido.mesera ? `Por ${mesaDetalle.pedido.mesera.nombre}` : '📱 Pedido QR'}
-                  {' · '}{new Date(mesaDetalle.pedido.created_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
+                <p className="text-xs text-gray-400 mt-0.5 block md:hidden">
+                  {new Date(mesaDetalle.pedido.created_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
                 </p>
               </div>
               <button onClick={() => { setMesaDetalle(null); setVistaModal('pago') }} className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center"><X size={18} /></button>
@@ -2499,13 +2510,20 @@ export default function GerenciaPage() {
                 <h3 className="font-bold text-gray-700 text-sm mb-2">Pedido</h3>
                 <div className="space-y-2">
                   {mesaDetalle.pedido.items.map((item, i) => (
-                    <div key={i} className="flex items-center justify-between text-sm">
-                      <div className="flex items-center gap-2">
-                        <span className={`w-2 h-2 rounded-full ${item.estado === 'listo' || item.estado === 'entregado' ? 'bg-green-500' : item.estado === 'en_preparacion' ? 'bg-orange-400' : 'bg-gray-300'}`} />
-                        <span>{item.cantidad}x {item.nombre}</span>
-                        {item.notas && <span className="text-yellow-600 text-xs">({item.notas})</span>}
+                    <div key={i} className="flex items-start justify-between text-sm gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`w-2 h-2 rounded-full shrink-0 mt-0.5 ${item.estado === 'listo' || item.estado === 'entregado' ? 'bg-green-500' : item.estado === 'en_preparacion' ? 'bg-orange-400' : 'bg-gray-300'}`} />
+                          <span>{item.cantidad}× {item.nombre}</span>
+                          {item.notas && <span className="text-yellow-600 text-xs">({item.notas})</span>}
+                        </div>
+                        {item.pedido_por_nombre && (
+                          <span className="ml-4 inline-flex items-center gap-1 text-xs text-blue-600 font-semibold mt-0.5">
+                            ↳ agregado por {item.pedido_por_nombre}
+                          </span>
+                        )}
                       </div>
-                      <span className="font-semibold">${(item.cantidad * item.precio_unitario).toLocaleString('es-CO')}</span>
+                      <span className="font-semibold shrink-0">${(item.cantidad * item.precio_unitario).toLocaleString('es-CO')}</span>
                     </div>
                   ))}
                 </div>
