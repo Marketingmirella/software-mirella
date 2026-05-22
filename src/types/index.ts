@@ -1,5 +1,5 @@
 // ─── USUARIOS Y ROLES ────────────────────────────────────────────────────────
-export type Rol = 'gerente' | 'mesera' | 'cocina'
+export type Rol = 'gerente' | 'mesera' | 'cocina' | 'domi'
 
 export interface Usuario {
   id: string

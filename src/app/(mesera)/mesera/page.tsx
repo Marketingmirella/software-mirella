@@ -93,16 +93,17 @@ export default function MeseraPage() {
         // Usar .then() en lugar de async/await para mayor compatibilidad con realtime
         supabase
           .from('pedidos')
-          .select('mesa:mesas(numero), items:items_pedido(id, estado, plato:platos(nombre))')
+          .select('tipo, mesa:mesas(numero), items:items_pedido(id, estado, plato:platos(nombre))')
           .eq('id', item.pedido_id)
           .maybeSingle()
           .then(({ data: pedido }) => {
             if (!pedido) return
             const p = pedido as unknown as {
+              tipo: string
               mesa: { numero: number } | null
               items: { id: string; estado: string; plato: { nombre: string } }[]
             }
-            if (!p.mesa) return // domicilio, no aplica
+            if (!p.mesa || p.tipo === 'domi') return // domicilios domi van al panel domi, no aquí
 
             // Identificar el plato específico que acaba de quedar listo
             const itemListo = p.items.find(i => i.id === item.id)

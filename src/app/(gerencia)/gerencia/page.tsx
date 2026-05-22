@@ -24,6 +24,7 @@ interface PedidoDetalle {
   mesa: { numero: number }; mesera: { nombre: string } | null; items: ItemDetalle[]
   cliente_nombre?: string | null; cliente_telefono?: string | null
   cliente_cedula?: string | null; cliente_direccion?: string | null
+  comprobante_url?: string | null; metodo_pago_cliente?: string | null
 }
 interface PagoRegistrado { id: string; metodo: string; monto: number; propina: number; created_at: string }
 interface TiempoStat { nombre: string; espera: number; preparacion: number; total: number; cantidad: number }
@@ -589,12 +590,17 @@ export default function GerenciaPage() {
   async function abrirDetalleDomi(pedidoId: string) {
     const { data: pedido } = await supabase.from('pedidos').select(`
       id, estado, tipo, created_at, notas, cliente_nombre, cliente_cedula, cliente_telefono, cliente_direccion,
+      comprobante_url, metodo_pago_cliente,
       mesera:usuarios(nombre),
       items:items_pedido(estado, cantidad, precio_unitario, notas, plato:platos(nombre))
     `).eq('id', pedidoId).single()
     if (!pedido) { toast.error('No se encontró el domi'); return }
     const { data: pagos } = await supabase.from('pagos').select('*').eq('pedido_id', pedido.id).order('created_at')
-    const p = pedido as typeof pedido & { cliente_nombre: string | null; cliente_cedula: string | null; cliente_telefono: string | null; cliente_direccion: string | null }
+    const p = pedido as typeof pedido & {
+      cliente_nombre: string | null; cliente_cedula: string | null
+      cliente_telefono: string | null; cliente_direccion: string | null
+      comprobante_url: string | null; metodo_pago_cliente: string | null
+    }
     const fmt: PedidoDetalle = {
       ...pedido,
       mesa: { numero: 0 } as { numero: number },
@@ -605,9 +611,25 @@ export default function GerenciaPage() {
       cliente_cedula: p.cliente_cedula,
       cliente_telefono: p.cliente_telefono,
       cliente_direccion: p.cliente_direccion,
+      comprobante_url: p.comprobante_url,
+      metodo_pago_cliente: p.metodo_pago_cliente,
     }
     setMesaDetalle({ mesa: null, pedido: fmt, pagos: (pagos || []) as PagoRegistrado[], isDomi: true })
     setMontoPago(''); setPropinaPago(''); setMetodoPago('efectivo'); setVistaModal('pago')
+  }
+
+  async function confirmarPagoTransferencia() {
+    if (!mesaDetalle) return
+    const metodo = mesaDetalle.pedido.metodo_pago_cliente as MetodoPago | null
+    if (!metodo) { toast.error('Sin método de pago del cliente'); return }
+    setAgregandoPago(true)
+    const total = mesaDetalle.pedido.items.reduce((a, i) => a + i.cantidad * i.precio_unitario, 0)
+    await supabase.from('pagos').insert({ pedido_id: mesaDetalle.pedido.id, metodo, monto: total, propina: 0 })
+    await supabase.from('pedidos').update({ estado: 'pagado', pagado_en: new Date().toISOString() }).eq('id', mesaDetalle.pedido.id)
+    toast.success('✅ Pago confirmado y registrado en caja')
+    setMesaDetalle(null); setVistaModal('pago')
+    setAgregandoPago(false)
+    cargarMesas(); cargarDatos()
   }
 
   async function agregarPago() {
@@ -1921,9 +1943,10 @@ export default function GerenciaPage() {
                     gerente: 'bg-purple-100 text-purple-700',
                     mesera:  'bg-orange-100 text-orange-700',
                     cocina:  'bg-green-100 text-green-700',
+                    domi:    'bg-blue-100 text-blue-700',
                   }
                   const ROL_LABEL: Record<string, string> = {
-                    gerente: 'Gerente', mesera: 'Mesera', cocina: 'Cocina',
+                    gerente: 'Gerente', mesera: 'Mesera', cocina: 'Cocina', domi: 'Domi',
                   }
                   return (
                     <div key={u.id} className={`flex items-center justify-between px-4 py-3.5 ${i !== 0 ? 'border-t border-gray-50' : ''}`}>
@@ -2128,6 +2151,11 @@ export default function GerenciaPage() {
                     {mesaDetalle.pedido.cliente_cedula && <p className="text-xs text-gray-400">🪪 C.C. {mesaDetalle.pedido.cliente_cedula}</p>}
                     {mesaDetalle.pedido.cliente_telefono && <p className="text-xs text-gray-400">📞 {mesaDetalle.pedido.cliente_telefono}</p>}
                     {mesaDetalle.pedido.cliente_direccion && <p className="text-xs text-gray-400">📍 {mesaDetalle.pedido.cliente_direccion}</p>}
+                    {mesaDetalle.pedido.metodo_pago_cliente && (
+                      <p className="text-xs font-bold mt-1">
+                        💳 Pago: <span className="capitalize text-blue-700">{mesaDetalle.pedido.metodo_pago_cliente}</span>
+                      </p>
+                    )}
                   </div>
                 ) : (
                   <h2 className="text-xl font-black text-gray-900">Mesa {mesaDetalle.mesa?.numero}</h2>
@@ -2140,6 +2168,29 @@ export default function GerenciaPage() {
               <button onClick={() => { setMesaDetalle(null); setVistaModal('pago') }} className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center"><X size={18} /></button>
             </div>
             <div className="overflow-y-auto flex-1 px-5 py-4 space-y-4">
+
+              {/* ── Comprobante de transferencia (solo domi) ── */}
+              {mesaDetalle.isDomi && mesaDetalle.pedido.comprobante_url && mesaDetalle.pagos.length === 0 && (
+                <div className="bg-blue-50 border-2 border-blue-200 rounded-2xl p-4 space-y-3">
+                  <p className="text-sm font-black text-blue-800">📎 Comprobante de pago del cliente</p>
+                  <a href={mesaDetalle.pedido.comprobante_url} target="_blank" rel="noopener noreferrer">
+                    <img
+                      src={mesaDetalle.pedido.comprobante_url}
+                      alt="Comprobante"
+                      className="w-full rounded-xl object-cover max-h-64 border border-blue-200 hover:opacity-90 transition-opacity"
+                    />
+                  </a>
+                  <p className="text-xs text-blue-600">Toca la imagen para verla en tamaño completo</p>
+                  <button
+                    onClick={confirmarPagoTransferencia}
+                    disabled={agregandoPago}
+                    className="w-full bg-green-500 hover:bg-green-600 disabled:bg-gray-300 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2">
+                    <CheckCircle size={18} />
+                    {agregandoPago ? 'Confirmando...' : `✅ Confirmar pago (${mesaDetalle.pedido.metodo_pago_cliente || 'transferencia'})`}
+                  </button>
+                </div>
+              )}
+
               <div>
                 <h3 className="font-bold text-gray-700 text-sm mb-2">Pedido</h3>
                 <div className="space-y-2">
@@ -2728,7 +2779,7 @@ export default function GerenciaPage() {
             <input type="email" placeholder="Correo electrónico" value={nuevoUsuario.email} onChange={e => setNuevoUsuario(p => ({ ...p, email: e.target.value }))} className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
             <input type="password" placeholder="Contraseña" value={nuevoUsuario.password} onChange={e => setNuevoUsuario(p => ({ ...p, password: e.target.value }))} className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
             <select value={nuevoUsuario.rol} onChange={e => setNuevoUsuario(p => ({ ...p, rol: e.target.value }))} className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400">
-              <option value="mesera">Mesera</option><option value="cocina">Cocina</option><option value="gerente">Gerente</option>
+              <option value="mesera">Mesera</option><option value="cocina">Cocina</option><option value="gerente">Gerente</option><option value="domi">Domi</option>
             </select>
             <button onClick={crearUsuario} disabled={creandoUsuario} className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 text-white font-bold py-3 rounded-xl">
               {creandoUsuario ? 'Creando...' : 'Crear usuario'}
@@ -2765,6 +2816,7 @@ export default function GerenciaPage() {
                 <option value="mesera">👩 Mesera — ve el panel de mesas y pedidos</option>
                 <option value="cocina">👨‍🍳 Cocina — ve el panel de preparación</option>
                 <option value="gerente">👔 Gerente — ve el panel completo</option>
+                <option value="domi">🛵 Domi — ve el panel de domicilios</option>
               </select>
               <p className="text-xs text-gray-400 mt-1.5">
                 ⚠️ El cambio aplica la próxima vez que el usuario inicie sesión.

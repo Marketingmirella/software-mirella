@@ -4,7 +4,11 @@
       "Bash(vercel --prod)",
       "Bash(npx vercel *)",
       "PowerShell(Get-Command node -ErrorAction SilentlyContinue; \\(Get-ChildItem \"C:\\\\Program Files\\\\nodejs\\\\npx.cmd\" -ErrorAction SilentlyContinue\\).FullName; \\(Get-ChildItem \"$env:APPDATA\\\\npm\\\\vercel.cmd\" -ErrorAction SilentlyContinue\\).FullName; \\(Get-ChildItem \"$env:APPDATA\\\\npm\\\\npx.cmd\" -ErrorAction SilentlyContinue\\).FullName)",
-      "PowerShell($env:PATH -split ';' | Where-Object { $_ -match 'node|npm|vercel' })"
+      "PowerShell($env:PATH -split ';' | Where-Object { $_ -match 'node|npm|vercel' })",
+      "PowerShell(New-Item -ItemType Directory -Force \"C:\\\\Users\\\\USUARIO\\\\Downloads\\\\software-mirella\\\\src\\\\app\\\\\\(domi\\)\\\\domi\")",
+      "PowerShell(New-Item -ItemType Directory -Force \"C:\\\\Users\\\\USUARIO\\\\Downloads\\\\software-mirella\\\\src\\\\app\\\\domi-pedido\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }

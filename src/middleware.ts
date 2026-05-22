@@ -4,13 +4,14 @@ import { NextResponse, type NextRequest } from 'next/server'
 // Rutas que NO necesitan estar logueado
 const RUTAS_PUBLICAS   = ['/login', '/reset-password']
 // Páginas del cliente que escanea el QR — acceso libre siempre
-const RUTAS_CLIENTE_QR = ['/mesa']
+const RUTAS_CLIENTE_QR = ['/mesa', '/domi-pedido']
 
 // Qué panel corresponde a cada rol
 const RUTA_POR_ROL: Record<string, string> = {
   gerente: '/gerencia',
   mesera:  '/mesera',
   cocina:  '/cocina',
+  domi:    '/domi',
 }
 
 export async function middleware(request: NextRequest) {

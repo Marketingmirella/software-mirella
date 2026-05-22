@@ -197,3 +197,20 @@ INSERT INTO configuracion (clave, valor) VALUES
 ON CONFLICT (clave) DO NOTHING;
 
 ALTER PUBLICATION supabase_realtime ADD TABLE configuracion;
+
+-- ─── MIGRACIÓN: ROL DOMI + COLUMNAS PEDIDOS ──────────────────
+-- Ejecutar en Supabase > SQL Editor si ya tienes el schema anterior
+
+-- 1. Agregar rol 'domi' a la tabla usuarios
+ALTER TABLE usuarios DROP CONSTRAINT IF EXISTS usuarios_rol_check;
+ALTER TABLE usuarios ADD CONSTRAINT usuarios_rol_check
+  CHECK (rol IN ('gerente', 'mesera', 'cocina', 'domi'));
+
+-- 2. Nuevas columnas en pedidos
+ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS comprobante_url      TEXT;
+ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS metodo_pago_cliente  TEXT;
+ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS domi_tomado_en       TIMESTAMPTZ;
+
+-- 3. Crear bucket de Storage para comprobantes (ejecutar también en Storage > New bucket)
+-- Nombre: comprobantes | Public: true
+-- O ejecutar: INSERT INTO storage.buckets (id, name, public) VALUES ('comprobantes', 'comprobantes', true) ON CONFLICT DO NOTHING;
