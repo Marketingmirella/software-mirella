@@ -2,9 +2,11 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 // Rutas que NO necesitan estar logueado
-const RUTAS_PUBLICAS   = ['/login', '/reset-password']
+const RUTAS_PUBLICAS   = ['/login', '/reset-password', '/registro']
 // Páginas del cliente que escanea el QR — acceso libre siempre
 const RUTAS_CLIENTE_QR = ['/mesa', '/domi-pedido']
+// Rutas accesibles para cualquier usuario autenticado (sin importar rol)
+const RUTAS_CON_SESION = ['/onboarding']
 
 // Qué panel corresponde a cada rol
 const RUTA_POR_ROL: Record<string, string> = {
@@ -51,13 +53,19 @@ export async function middleware(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   const esPublica = RUTAS_PUBLICAS.some(r => pathname.startsWith(r))
 
+  // ── Landing page: siempre pública ────────────────────────────
+  if (pathname === '/') return response
+
   // ── Sin sesión ───────────────────────────────────────────────
   if (!user) {
-    // Puede ver /login y /reset-password sin problema
+    // Puede ver rutas públicas sin problema
     if (esPublica) return response
     // Cualquier otra ruta → al login
     return NextResponse.redirect(new URL('/login', request.url))
   }
+
+  // ── Rutas accesibles para cualquier usuario autenticado ──────
+  if (RUTAS_CON_SESION.some(r => pathname.startsWith(r))) return response
 
   // ── Con sesión: obtener el rol del usuario ───────────────────
   const { data: usuario } = await supabase
@@ -68,7 +76,7 @@ export async function middleware(request: NextRequest) {
 
   const rutaCorrecta = usuario ? RUTA_POR_ROL[usuario.rol] : null
 
-  // Logueado intentando abrir /login → mandarlo a su panel
+  // Logueado intentando abrir /login o /registro → mandarlo a su panel
   if (esPublica) {
     return NextResponse.redirect(new URL(rutaCorrecta || '/login', request.url))
   }
