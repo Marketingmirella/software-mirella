@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import toast from 'react-hot-toast'
 import {
   BarChart3, TrendingUp, Users, DollarSign, Clock, ChefHat,
-  Plus, X, Play, Square, MapPin, CheckCircle, Banknote,
+  Plus, Minus, X, Play, Square, MapPin, CheckCircle, Banknote,
   Pencil, Trash2, UtensilsCrossed, Timer, UserCircle, Search, Bike,
   Download, SlidersHorizontal, CalendarDays, Settings, Lock, ClipboardList
 } from 'lucide-react'
