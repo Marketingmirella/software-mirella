@@ -91,6 +91,7 @@ export default function GerenciaPage() {
   const [movimientosCaja, setMovimientosCaja] = useState<{ id: string; tipo: string; monto: number; descripcion: string | null; created_at: string }[]>([])
   const [nuevoMov, setNuevoMov] = useState({ tipo: 'egreso' as 'ingreso' | 'egreso', monto: '', descripcion: '' })
   const [agregandoMov, setAgregandoMov] = useState(false)
+  const [abriendo, setAbriendo] = useState(false)
   // Inventario por turno
   const [pasoCaja, setPasoCaja] = useState<'efectivo' | 'inventario'>('efectivo')
   const [inventarioTurno, setInventarioTurno] = useState<Record<string, number>>({})
@@ -428,7 +429,12 @@ export default function GerenciaPage() {
       porMetodo[p.metodo].monto += p.monto
       porMetodo[p.metodo].propina += p.propina
     })
-    setPagosPorMetodo(Object.entries(porMetodo).map(([metodo, v]) => ({ metodo, ...v })))
+    // Redondear al peso para evitar errores de punto flotante en el cuadre
+    setPagosPorMetodo(Object.entries(porMetodo).map(([metodo, v]) => ({
+      metodo,
+      monto:   Math.round(v.monto),
+      propina: Math.round(v.propina),
+    })))
     setMovimientosCaja(movs || [])
   }, [supabase])
 
@@ -803,25 +809,35 @@ export default function GerenciaPage() {
   }
 
   async function abrirTurno() {
+    if (abriendo) return  // Bloquea doble clic
+    setAbriendo(true)
+
     const { data: { user } } = await supabase.auth.getUser()
     const { data: nuevoTurno } = await supabase
       .from('turnos').insert({ abierto_por: user?.id, monto_inicial: parseFloat(montoInicial) || 0 })
       .select().single()
 
     if (nuevoTurno?.id) {
-      // Guardar snapshot de inventario para este turno
       const entries = Object.entries(inventarioTurno).filter(([, qty]) => qty > 0)
       if (entries.length > 0) {
-        for (const [platoId, qty] of entries) {
-          await supabase.from('inventario').update({ cantidad_disponible: qty }).eq('plato_id', platoId)
-          await supabase.from('turnos_inventario').insert({ turno_id: nuevoTurno.id, plato_id: platoId, cantidad_inicial: qty })
-        }
+        // Todas las actualizaciones en paralelo — mucho más rápido que loop secuencial
+        await Promise.all([
+          // Un solo insert con todas las filas de inventario del turno
+          supabase.from('turnos_inventario').insert(
+            entries.map(([platoId, qty]) => ({ turno_id: nuevoTurno.id, plato_id: platoId, cantidad_inicial: qty }))
+          ),
+          // Actualizar inventario en paralelo (una petición por plato simultánea)
+          ...entries.map(([platoId, qty]) =>
+            supabase.from('inventario').update({ cantidad_disponible: qty }).eq('plato_id', platoId)
+          ),
+        ])
       }
       cargarCaja(nuevoTurno.id)
     }
 
-    toast.success('Turno abierto')
+    toast.success('✅ Turno abierto')
     setModalCaja(null); setMontoInicial(''); setPasoCaja('efectivo'); setInventarioTurno({})
+    setAbriendo(false)
     await cargarDatos()
   }
   async function cerrarTurno() {
@@ -2772,12 +2788,14 @@ export default function GerenciaPage() {
                   )}
                 </div>
                 <div className="px-5 py-4 border-t shrink-0 space-y-2">
-                  <button onClick={abrirTurno}
-                    className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-xl">
-                    ✓ Abrir turno
+                  <button onClick={abrirTurno} disabled={abriendo}
+                    className="w-full bg-green-500 hover:bg-green-600 disabled:bg-green-300 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition-all">
+                    {abriendo ? (
+                      <><span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Abriendo turno...</>
+                    ) : '✓ Abrir turno'}
                   </button>
-                  <button onClick={() => setPasoCaja('efectivo')}
-                    className="w-full text-gray-400 text-sm py-1 hover:text-gray-600">
+                  <button onClick={() => setPasoCaja('efectivo')} disabled={abriendo}
+                    className="w-full text-gray-400 text-sm py-1 hover:text-gray-600 disabled:opacity-40">
                     ← Volver
                   </button>
                 </div>
@@ -2790,25 +2808,25 @@ export default function GerenciaPage() {
         const totalIngresos = movimientosCaja.filter(m => m.tipo === 'ingreso').reduce((a, m) => a + m.monto, 0)
         const totalEgresos  = movimientosCaja.filter(m => m.tipo === 'egreso').reduce((a, m) => a + m.monto, 0)
 
-        // Calcular esperado por método
+        // Calcular esperado por método — redondeado al peso para evitar float errors
         const esperadoPorMetodo = METODOS.map(m => {
           const pago = pagosPorMetodo.find(p => p.metodo === m.id)
           let esperado = pago ? pago.monto + pago.propina : 0
           if (m.id === 'efectivo') esperado += turnoActivo.monto_inicial + totalIngresos - totalEgresos
-          return { ...m, esperado }
+          return { ...m, esperado: Math.round(esperado) }
         })
 
         // Sólo mostrar métodos con movimiento (o efectivo siempre)
         const metodosActivos = esperadoPorMetodo.filter(m => m.id === 'efectivo' || m.esperado > 0)
 
-        // Resumen de descuadre total
+        // Resumen de descuadre total — redondear contado también
         let totalEsperado = 0, totalContado = 0, hayAlgunConteo = false
         metodosActivos.forEach(m => {
           totalEsperado += m.esperado
           const v = parseFloat(conteoFinal[m.id] || '')
-          if (!isNaN(v)) { totalContado += v; hayAlgunConteo = true }
+          if (!isNaN(v)) { totalContado += Math.round(v); hayAlgunConteo = true }
         })
-        const descuadreTotal = totalContado - totalEsperado
+        const descuadreTotal = Math.round(totalContado - totalEsperado)
 
         return (
           <div className="fixed inset-0 bg-black/50 flex items-end justify-center z-50 p-4">
@@ -2846,7 +2864,7 @@ export default function GerenciaPage() {
                   const val = conteoFinal[m.id]
                   const contado = parseFloat(val || '')
                   const tieneValor = val !== undefined && val !== ''
-                  const diff = tieneValor && !isNaN(contado) ? contado - m.esperado : null
+                  const diff = tieneValor && !isNaN(contado) ? Math.round(contado) - m.esperado : null
 
                   return (
                     <div key={m.id} className={`rounded-2xl border-2 p-4 space-y-3 transition-all ${
