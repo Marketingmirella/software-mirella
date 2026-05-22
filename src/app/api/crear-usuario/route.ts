@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server'
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { email, password, nombre, rol } = body
+    const { email, password, nombre, rol, negocio_id } = body
 
     if (!email || !password || !nombre || !rol) {
       return NextResponse.json({ error: 'Faltan datos obligatorios' }, { status: 400 })
@@ -41,7 +41,7 @@ export async function POST(request: Request) {
     // Insertar perfil en tabla usuarios
     const { error: dbError } = await supabaseAdmin
       .from('usuarios')
-      .insert({ id: data.user.id, nombre, rol })
+      .insert({ id: data.user.id, nombre, rol, ...(negocio_id ? { negocio_id } : {}) })
 
     if (dbError) {
       // Si falla la BD, eliminar el usuario de auth para no dejar datos huérfanos
