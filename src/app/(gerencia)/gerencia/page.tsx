@@ -1203,7 +1203,7 @@ export default function GerenciaPage() {
           // Mesa libre → crear nuevo pedido
           pedidoId = await crearPedido({
             mesa_id: nuevoOrdenMesaId, mesera_id: user?.id || null, turno_id: turnoActivo.id,
-            estado: 'pendiente', tipo: 'mesa', notas: nuevoOrdenNotas || null,
+            estado: 'pendiente', tipo: 'mesera', notas: nuevoOrdenNotas || null,
           })
           await supabase.from('mesas').update({ estado: 'ocupada' }).eq('id', nuevoOrdenMesaId!)
         }
