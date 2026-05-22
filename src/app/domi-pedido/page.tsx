@@ -141,6 +141,30 @@ export default function DomiPedidoPage() {
     setPreviewUrl(URL.createObjectURL(file))
   }
 
+  // Comprime la imagen y la convierte a base64 para guardarla sin storage bucket
+  function comprimirImagen(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = (ev) => {
+        const img = new Image()
+        img.onload = () => {
+          const MAX = 1200
+          let w = img.width, h = img.height
+          if (w > MAX) { h = Math.round(h * MAX / w); w = MAX }
+          if (h > MAX) { w = Math.round(w * MAX / h); h = MAX }
+          const canvas = document.createElement('canvas')
+          canvas.width = w; canvas.height = h
+          canvas.getContext('2d')!.drawImage(img, 0, 0, w, h)
+          resolve(canvas.toDataURL('image/jpeg', 0.75))
+        }
+        img.onerror = reject
+        img.src = ev.target!.result as string
+      }
+      reader.onerror = reject
+      reader.readAsDataURL(file)
+    })
+  }
+
   // ── ENVIAR PEDIDO ─────────────────────────────────────────────
   async function enviarPedido() {
     if (carrito.length === 0 || !metodoPago) return
@@ -159,21 +183,16 @@ export default function DomiPedidoPage() {
       setEnviando(false); return
     }
 
-    // Subir comprobante si aplica
+    // Comprimir y guardar comprobante como base64 (sin storage bucket, funciona anónimo)
     let comprob_url: string | null = null
     if (comprobante && (metodoPago === 'nequi' || metodoPago === 'daviplata')) {
       setSubiendoFoto(true)
-      const ext = comprobante.name.split('.').pop() || 'jpg'
-      const filename = `comprobante-${Date.now()}.${ext}`
-      const { error: upErr } = await supabase.storage
-        .from('comprobantes')
-        .upload(filename, comprobante, { cacheControl: '3600', upsert: false })
-      if (upErr) {
-        toast.error('Error al subir el comprobante. Intenta de nuevo.')
+      try {
+        comprob_url = await comprimirImagen(comprobante)
+      } catch {
+        toast.error('Error al procesar el comprobante. Intenta de nuevo.')
         setEnviando(false); setSubiendoFoto(false); return
       }
-      const { data: urlData } = supabase.storage.from('comprobantes').getPublicUrl(filename)
-      comprob_url = urlData.publicUrl
       setSubiendoFoto(false)
     }
 
@@ -319,7 +338,7 @@ export default function DomiPedidoPage() {
               <Upload size={32} className="text-blue-400 mb-2" />
               <p className="text-sm font-semibold text-blue-600">Toca para adjuntar foto</p>
               <p className="text-xs text-gray-400 mt-1">JPG, PNG — desde tu galería o cámara</p>
-              <input type="file" accept="image/*" className="hidden" onChange={seleccionarFoto} capture="environment" />
+              <input type="file" accept="image/*" className="hidden" onChange={seleccionarFoto} />
             </label>
           )}
 
