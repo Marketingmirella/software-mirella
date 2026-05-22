@@ -19,7 +19,7 @@ import {
 interface PlatoStat { nombre: string; cantidad: number; total: number }
 interface MeseraStat { nombre: string; pedidos: number; total: number }
 interface PedidoResumen { id: string; mesa: number; total: number; estado: string; created_at: string; pagado_en?: string | null; tipo: string; turno_id?: string | null }
-interface ItemDetalle { nombre: string; cantidad: number; precio_unitario: number; notas: string | null; estado: string; pedido_por_nombre?: string | null }
+interface ItemDetalle { id?: string; plato_id?: string | null; nombre: string; cantidad: number; precio_unitario: number; notas: string | null; estado: string; pedido_por_nombre?: string | null }
 interface PedidoDetalle {
   id: string; estado: string; tipo: string; created_at: string; notas: string | null
   mesa: { numero: number }; mesera: { nombre: string } | null; items: ItemDetalle[]
@@ -157,6 +157,22 @@ export default function GerenciaPage() {
   const [restablecerConfirm, setRestablecerConfirm] = useState('')
   const [restableciendo, setRestableciendo] = useState(false)
   const [pasoRestablecer, setPasoRestablecer] = useState<'opciones' | 'confirmar'>('opciones')
+
+  // Edición de ítems desde gerencia (cancelar / reemplazar)
+  const [modoEdicionPedido, setModoEdicionPedido] = useState(false)
+  const [itemReemplazando, setItemReemplazando] = useState<{ id: string; nombre: string } | null>(null)
+  const [guardandoEdicion, setGuardandoEdicion] = useState(false)
+  const [categoriaReemplazo, setCategoriaReemplazo] = useState<number | 'todas'>('todas')
+
+  // Tomar pedido desde gerencia
+  const [modalNuevoPedido, setModalNuevoPedido] = useState(false)
+  const [nuevoOrdenTipo, setNuevoOrdenTipo] = useState<'mesa' | 'domi'>('mesa')
+  const [nuevoOrdenMesaId, setNuevoOrdenMesaId] = useState<number | null>(null)
+  const [nuevoOrdenCarrito, setNuevoOrdenCarrito] = useState<Record<string, number>>({})
+  const [nuevoOrdenNotas, setNuevoOrdenNotas] = useState('')
+  const [nuevoOrdenDomi, setNuevoOrdenDomi] = useState({ nombre: '', telefono: '', direccion: '' })
+  const [nuevoOrdenCategoria, setNuevoOrdenCategoria] = useState<number | 'todas'>('todas')
+  const [tomandoPedido, setTomandoPedido] = useState(false)
 
   // Gestión de zonas y mesas
   const [modoGestionMesas, setModoGestionMesas] = useState(false)
@@ -699,10 +715,11 @@ export default function GerenciaPage() {
   // ── DETALLE MESA ─────────────────────────────────────────────
   async function abrirDetalleMesa(mesa: typeof mesas[0]) {
     if (mesa.estado === 'libre') { toast('Mesa libre'); return }
+    setModoEdicionPedido(false); setItemReemplazando(null)
     const { data: pedido } = await supabase.from('pedidos').select(`
       id, estado, tipo, created_at, notas, cliente_nombre, cliente_cedula, cliente_telefono,
       mesa:mesas(numero), mesera:usuarios(nombre),
-      items:items_pedido(estado, cantidad, precio_unitario, notas, plato:platos(nombre), pedido_por_usuario:usuarios!pedido_por(nombre))
+      items:items_pedido(id, plato_id, estado, cantidad, precio_unitario, notas, plato:platos(nombre), pedido_por_usuario:usuarios!pedido_por(nombre))
     `).eq('mesa_id', mesa.id).in('estado', ['pendiente','en_preparacion','listo','entregado','esperando_pago'])
       .order('created_at', { ascending: false }).limit(1).single()
     if (!pedido) { toast.error('No se encontró el pedido'); return }
@@ -712,8 +729,8 @@ export default function GerenciaPage() {
       ...pedido,
       mesa: (pedido.mesa as unknown as { numero: number }),
       mesera: pedido.mesera as unknown as { nombre: string } | null,
-      items: (pedido.items as unknown as { estado: string; cantidad: number; precio_unitario: number; notas: string | null; plato: { nombre: string }; pedido_por_usuario: { nombre: string } | null }[])
-        .map(i => ({ nombre: i.plato?.nombre || '', cantidad: i.cantidad, precio_unitario: i.precio_unitario, notas: i.notas, estado: i.estado, pedido_por_nombre: i.pedido_por_usuario?.nombre || null })),
+      items: (pedido.items as unknown as { id: string; plato_id: string | null; estado: string; cantidad: number; precio_unitario: number; notas: string | null; plato: { nombre: string }; pedido_por_usuario: { nombre: string } | null }[])
+        .map(i => ({ id: i.id, plato_id: i.plato_id, nombre: i.plato?.nombre || '', cantidad: i.cantidad, precio_unitario: i.precio_unitario, notas: i.notas, estado: i.estado, pedido_por_nombre: i.pedido_por_usuario?.nombre || null })),
       cliente_nombre:   p.cliente_nombre,
       cliente_cedula:   p.cliente_cedula,
       cliente_telefono: p.cliente_telefono,
@@ -1114,6 +1131,106 @@ export default function GerenciaPage() {
     toast.success('Plato eliminado'); cargarCarta()
   }
 
+  // ── CANCELAR / REEMPLAZAR ÍTEM ────────────────────────────────
+  async function cancelarItem(itemId: string) {
+    if (!confirm('¿Cancelar este plato del pedido? Se eliminará de cocina también.')) return
+    setGuardandoEdicion(true)
+    const { error } = await supabase.from('items_pedido').delete().eq('id', itemId)
+    if (error) { toast.error('Error al cancelar plato'); setGuardandoEdicion(false); return }
+    setMesaDetalle(prev => prev
+      ? { ...prev, pedido: { ...prev.pedido, items: prev.pedido.items.filter(i => i.id !== itemId) } }
+      : null)
+    toast.success('Plato cancelado ✓')
+    setGuardandoEdicion(false)
+  }
+
+  async function reemplazarItem(itemId: string, nuevoPlatoId: string) {
+    const plato = platos.find(p => p.id === nuevoPlatoId)
+    if (!plato) return
+    setGuardandoEdicion(true)
+    const { error } = await supabase.from('items_pedido')
+      .update({ plato_id: nuevoPlatoId, precio_unitario: plato.precio, estado: 'pendiente' })
+      .eq('id', itemId)
+    if (error) { toast.error('Error al reemplazar plato'); setGuardandoEdicion(false); return }
+    setMesaDetalle(prev => {
+      if (!prev) return null
+      return { ...prev, pedido: { ...prev.pedido, items: prev.pedido.items.map(i =>
+        i.id === itemId ? { ...i, plato_id: nuevoPlatoId, nombre: plato.nombre, precio_unitario: plato.precio, estado: 'pendiente' } : i
+      ) } }
+    })
+    setItemReemplazando(null)
+    toast.success(`✅ Cambiado a "${plato.nombre}" — enviado a cocina`)
+    setGuardandoEdicion(false)
+  }
+
+  // ── TOMAR PEDIDO DESDE GERENCIA ───────────────────────────────
+  async function tomarPedidoGerencia() {
+    const itemsCarrito = Object.entries(nuevoOrdenCarrito).filter(([, qty]) => qty > 0)
+    if (itemsCarrito.length === 0) { toast.error('Agrega al menos un plato al pedido'); return }
+    if (!turnoActivo) { toast.error('No hay turno activo — abre el turno primero'); return }
+    if (nuevoOrdenTipo === 'mesa' && !nuevoOrdenMesaId) { toast.error('Selecciona una mesa'); return }
+    setTomandoPedido(true)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      let pedidoId: string
+
+      if (nuevoOrdenTipo === 'mesa') {
+        const mesa = mesas.find(m => m.id === nuevoOrdenMesaId)
+        if (mesa && mesa.estado !== 'libre') {
+          // Mesa ocupada → agregar a pedido existente
+          const { data: ped } = await supabase.from('pedidos')
+            .select('id').eq('mesa_id', nuevoOrdenMesaId!)
+            .in('estado', ['pendiente','en_preparacion','listo','entregado','esperando_pago'])
+            .order('created_at', { ascending: false }).limit(1).maybeSingle()
+          if (ped) {
+            pedidoId = ped.id
+          } else {
+            const { data: nuevo } = await supabase.from('pedidos').insert({
+              mesa_id: nuevoOrdenMesaId, mesera_id: user?.id, turno_id: turnoActivo.id,
+              estado: 'pendiente', tipo: 'mesa', notas: nuevoOrdenNotas || null,
+            }).select('id').single()
+            pedidoId = nuevo!.id
+            await supabase.from('mesas').update({ estado: 'ocupada' }).eq('id', nuevoOrdenMesaId!)
+          }
+        } else {
+          // Mesa libre → crear nuevo pedido
+          const { data: nuevo } = await supabase.from('pedidos').insert({
+            mesa_id: nuevoOrdenMesaId, mesera_id: user?.id, turno_id: turnoActivo.id,
+            estado: 'pendiente', tipo: 'mesa', notas: nuevoOrdenNotas || null,
+          }).select('id').single()
+          pedidoId = nuevo!.id
+          await supabase.from('mesas').update({ estado: 'ocupada' }).eq('id', nuevoOrdenMesaId!)
+        }
+      } else {
+        // Domicilio
+        const { data: nuevo } = await supabase.from('pedidos').insert({
+          mesera_id: user?.id, turno_id: turnoActivo.id,
+          estado: 'pendiente', tipo: 'domi', notas: nuevoOrdenNotas || null,
+          cliente_nombre:    nuevoOrdenDomi.nombre    || null,
+          cliente_telefono:  nuevoOrdenDomi.telefono  || null,
+          cliente_direccion: nuevoOrdenDomi.direccion || null,
+        }).select('id').single()
+        pedidoId = nuevo!.id
+      }
+
+      await supabase.from('items_pedido').insert(
+        itemsCarrito.map(([platoId, qty]) => {
+          const p = platos.find(pl => pl.id === platoId)!
+          return { pedido_id: pedidoId, plato_id: platoId, cantidad: qty, precio_unitario: p.precio, estado: 'pendiente', pedido_por: user?.id || null }
+        })
+      )
+
+      toast.success('✅ Pedido enviado a cocina')
+      setModalNuevoPedido(false)
+      setNuevoOrdenCarrito({}); setNuevoOrdenMesaId(null); setNuevoOrdenNotas('')
+      setNuevoOrdenDomi({ nombre: '', telefono: '', direccion: '' })
+      cargarMesas(); cargarDatos()
+    } catch (e) {
+      toast.error('Error al tomar pedido: ' + String(e))
+    }
+    setTomandoPedido(false)
+  }
+
   const platosFiltradosCarta = categoriaActivaCarta === 'todas' ? platos : platos.filter(p => p.categoria_id === categoriaActivaCarta)
   const utilidadPlato = (p: Plato) => p.costo ? ((p.precio - p.costo) / p.precio * 100).toFixed(0) : null
 
@@ -1252,6 +1369,16 @@ export default function GerenciaPage() {
                 <p className="text-sm font-bold text-purple-700">Modo gestión de mesas</p>
               )}
               <div className="flex gap-2 shrink-0">
+                <button onClick={() => {
+                  setModalNuevoPedido(true)
+                  setNuevoOrdenTipo('mesa'); setNuevoOrdenCarrito({})
+                  setNuevoOrdenMesaId(null); setNuevoOrdenNotas('')
+                  setNuevoOrdenCategoria('todas')
+                  setNuevoOrdenDomi({ nombre: '', telefono: '', direccion: '' })
+                }}
+                  className="text-xs font-bold px-3 py-1.5 rounded-xl flex items-center gap-1.5 bg-purple-600 text-white hover:bg-purple-700 transition-colors">
+                  <Plus size={13} /> Pedido
+                </button>
                 <button onClick={() => setModalQRDomi(true)}
                   className="text-xs font-bold px-3 py-1.5 rounded-xl flex items-center gap-1.5 bg-blue-600 text-white hover:bg-blue-700 transition-colors">
                   📱 QR Domi
@@ -2480,7 +2607,16 @@ export default function GerenciaPage() {
                   {new Date(mesaDetalle.pedido.created_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
                 </p>
               </div>
-              <button onClick={() => { setMesaDetalle(null); setVistaModal('pago') }} className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center"><X size={18} /></button>
+              <div className="flex items-center gap-2">
+                {!mesaDetalle.isDomi && (
+                  <button
+                    onClick={() => { setModoEdicionPedido(v => !v); setItemReemplazando(null) }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${modoEdicionPedido ? 'bg-orange-500 text-white' : 'bg-orange-100 text-orange-700 hover:bg-orange-200'}`}>
+                    {modoEdicionPedido ? '✓ Listo' : '✏️ Editar'}
+                  </button>
+                )}
+                <button onClick={() => { setMesaDetalle(null); setVistaModal('pago'); setModoEdicionPedido(false); setItemReemplazando(null) }} className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center"><X size={18} /></button>
+              </div>
             </div>
             <div className="overflow-y-auto flex-1 px-5 py-4 space-y-4">
 
@@ -2507,23 +2643,48 @@ export default function GerenciaPage() {
               )}
 
               <div>
-                <h3 className="font-bold text-gray-700 text-sm mb-2">Pedido</h3>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-bold text-gray-700 text-sm">Pedido</h3>
+                  {modoEdicionPedido && (
+                    <span className="text-xs text-orange-600 font-semibold bg-orange-50 px-2 py-0.5 rounded-full">
+                      ✏️ Modo edición
+                    </span>
+                  )}
+                </div>
                 <div className="space-y-2">
                   {mesaDetalle.pedido.items.map((item, i) => (
-                    <div key={i} className="flex items-start justify-between text-sm gap-2">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className={`w-2 h-2 rounded-full shrink-0 mt-0.5 ${item.estado === 'listo' || item.estado === 'entregado' ? 'bg-green-500' : item.estado === 'en_preparacion' ? 'bg-orange-400' : 'bg-gray-300'}`} />
-                          <span>{item.cantidad}× {item.nombre}</span>
-                          {item.notas && <span className="text-yellow-600 text-xs">({item.notas})</span>}
+                    <div key={item.id || i} className={`text-sm rounded-xl transition-all ${modoEdicionPedido ? 'bg-orange-50 border border-orange-200 p-2.5' : ''}`}>
+                      {modoEdicionPedido && item.id && (
+                        <div className="flex gap-1.5 mb-2">
+                          <button
+                            onClick={() => cancelarItem(item.id!)}
+                            disabled={guardandoEdicion}
+                            className="flex items-center gap-1 text-xs bg-red-100 hover:bg-red-200 text-red-600 font-bold px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50">
+                            <X size={11} /> Cancelar
+                          </button>
+                          <button
+                            onClick={() => { setItemReemplazando({ id: item.id!, nombre: item.nombre }); setCategoriaReemplazo('todas') }}
+                            disabled={guardandoEdicion}
+                            className="flex items-center gap-1 text-xs bg-blue-100 hover:bg-blue-200 text-blue-600 font-bold px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50">
+                            🔄 Reemplazar
+                          </button>
                         </div>
-                        {item.pedido_por_nombre && (
-                          <span className="ml-4 inline-flex items-center gap-1 text-xs text-blue-600 font-semibold mt-0.5">
-                            ↳ agregado por {item.pedido_por_nombre}
-                          </span>
-                        )}
+                      )}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`w-2 h-2 rounded-full shrink-0 mt-0.5 ${item.estado === 'listo' || item.estado === 'entregado' ? 'bg-green-500' : item.estado === 'en_preparacion' ? 'bg-orange-400' : 'bg-gray-300'}`} />
+                            <span>{item.cantidad}× {item.nombre}</span>
+                            {item.notas && <span className="text-yellow-600 text-xs">({item.notas})</span>}
+                          </div>
+                          {item.pedido_por_nombre && (
+                            <span className="ml-4 inline-flex items-center gap-1 text-xs text-blue-600 font-semibold mt-0.5">
+                              ↳ agregado por {item.pedido_por_nombre}
+                            </span>
+                          )}
+                        </div>
+                        <span className="font-semibold shrink-0">${(item.cantidad * item.precio_unitario).toLocaleString('es-CO')}</span>
                       </div>
-                      <span className="font-semibold shrink-0">${(item.cantidad * item.precio_unitario).toLocaleString('es-CO')}</span>
                     </div>
                   ))}
                 </div>
@@ -3539,6 +3700,220 @@ export default function GerenciaPage() {
                 </div>
               )}
 
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══ MODAL: REEMPLAZAR PLATO ═══════════════════════════════════ */}
+      {itemReemplazando && (
+        <div className="fixed inset-0 bg-black/70 z-[60] flex items-end justify-center">
+          <div className="bg-white w-full max-h-[85vh] rounded-t-3xl flex flex-col overflow-hidden fade-in">
+            <div className="flex items-center justify-between px-5 py-4 border-b shrink-0">
+              <div>
+                <h3 className="font-bold text-gray-900">Reemplazar plato</h3>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  <span className="text-orange-600 font-semibold">"{itemReemplazando.nombre}"</span> → ¿por cuál lo cambiamos?
+                </p>
+              </div>
+              <button onClick={() => setItemReemplazando(null)} className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center">
+                <X size={18} />
+              </button>
+            </div>
+            {/* Filtro por categoría */}
+            <div className="flex gap-2 px-4 py-2 overflow-x-auto border-b shrink-0">
+              <button onClick={() => setCategoriaReemplazo('todas')}
+                className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ${categoriaReemplazo === 'todas' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                Todas
+              </button>
+              {categorias.map(c => (
+                <button key={c.id} onClick={() => setCategoriaReemplazo(c.id)}
+                  className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ${categoriaReemplazo === c.id ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                  {c.nombre}
+                </button>
+              ))}
+            </div>
+            <div className="overflow-y-auto flex-1 p-4 space-y-2">
+              {platos
+                .filter(p => p.activo && (categoriaReemplazo === 'todas' || p.categoria_id === categoriaReemplazo))
+                .map(p => (
+                  <button key={p.id}
+                    onClick={() => reemplazarItem(itemReemplazando.id, p.id)}
+                    disabled={guardandoEdicion}
+                    className="w-full text-left bg-white border border-gray-200 hover:border-purple-400 hover:bg-purple-50 rounded-2xl px-4 py-3 transition-all disabled:opacity-50">
+                    <div className="flex justify-between items-start gap-2">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-gray-900 truncate">{p.nombre}</p>
+                        {p.descripcion && <p className="text-xs text-gray-400 truncate mt-0.5">{p.descripcion}</p>}
+                        <p className="text-xs text-gray-400 mt-0.5">{categorias.find(c => c.id === p.categoria_id)?.nombre}</p>
+                      </div>
+                      <span className="font-black text-purple-700 shrink-0">${p.precio.toLocaleString('es-CO')}</span>
+                    </div>
+                  </button>
+                ))}
+              {platos.filter(p => p.activo).length === 0 && (
+                <p className="text-center text-gray-400 text-sm py-8">Sin platos activos en la carta</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══ MODAL: TOMAR PEDIDO DESDE GERENCIA ═══════════════════════ */}
+      {modalNuevoPedido && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-end justify-center">
+          <div className="bg-white w-full max-h-[95vh] rounded-t-3xl flex flex-col overflow-hidden fade-in">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b shrink-0">
+              <div>
+                <h2 className="text-lg font-black text-gray-900">Tomar pedido</h2>
+                <p className="text-xs text-gray-400">Gerencia</p>
+              </div>
+              <button onClick={() => { setModalNuevoPedido(false); setNuevoOrdenCarrito({}); setNuevoOrdenMesaId(null) }}
+                className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center"><X size={18} /></button>
+            </div>
+
+            <div className="overflow-y-auto flex-1 px-5 py-4 space-y-5">
+              {/* Tipo */}
+              <div>
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Tipo de pedido</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={() => setNuevoOrdenTipo('mesa')}
+                    className={`py-3 rounded-2xl font-bold text-sm border-2 transition-all flex items-center justify-center gap-2 ${nuevoOrdenTipo === 'mesa' ? 'bg-purple-600 text-white border-purple-600' : 'border-gray-200 text-gray-600 hover:border-purple-300'}`}>
+                    🍽️ Mesa
+                  </button>
+                  <button onClick={() => setNuevoOrdenTipo('domi')}
+                    className={`py-3 rounded-2xl font-bold text-sm border-2 transition-all flex items-center justify-center gap-2 ${nuevoOrdenTipo === 'domi' ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-200 text-gray-600 hover:border-blue-300'}`}>
+                    🛵 Domicilio
+                  </button>
+                </div>
+              </div>
+
+              {/* Selector de mesa */}
+              {nuevoOrdenTipo === 'mesa' && (
+                <div>
+                  <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Selecciona la mesa</p>
+                  {zonasLista.map(zona => (
+                    <div key={zona} className="mb-3">
+                      <p className="text-xs text-gray-400 font-semibold mb-1.5">{zona}</p>
+                      <div className="grid grid-cols-4 gap-2">
+                        {mesas.filter(m => (m.zona || 'Sin zona') === zona).sort((a,b) => a.numero - b.numero).map(m => (
+                          <button key={m.id} onClick={() => setNuevoOrdenMesaId(m.id)}
+                            className={`py-3 rounded-xl font-black text-sm border-2 transition-all ${
+                              nuevoOrdenMesaId === m.id
+                                ? 'bg-purple-600 text-white border-purple-600'
+                                : m.estado === 'libre'
+                                  ? 'bg-white border-gray-200 text-gray-600 hover:border-purple-300'
+                                  : 'bg-orange-50 border-orange-400 text-orange-700'
+                            }`}>
+                            {m.numero}
+                            {m.estado !== 'libre' && <span className="block text-[9px] font-normal">ocupada</span>}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                  {mesas.length === 0 && (
+                    <p className="text-sm text-gray-400 text-center py-4">No hay mesas configuradas</p>
+                  )}
+                </div>
+              )}
+
+              {/* Datos del domicilio */}
+              {nuevoOrdenTipo === 'domi' && (
+                <div className="space-y-3">
+                  <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Datos del domicilio</p>
+                  <input type="text" placeholder="Nombre del cliente" value={nuevoOrdenDomi.nombre}
+                    onChange={e => setNuevoOrdenDomi(p => ({ ...p, nombre: e.target.value }))}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                  <input type="tel" placeholder="Teléfono" value={nuevoOrdenDomi.telefono}
+                    onChange={e => setNuevoOrdenDomi(p => ({ ...p, telefono: e.target.value }))}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                  <input type="text" placeholder="Dirección" value={nuevoOrdenDomi.direccion}
+                    onChange={e => setNuevoOrdenDomi(p => ({ ...p, direccion: e.target.value }))}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                </div>
+              )}
+
+              {/* Menú */}
+              <div>
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Platos</p>
+                <div className="flex gap-2 overflow-x-auto mb-3 pb-1">
+                  <button onClick={() => setNuevoOrdenCategoria('todas')}
+                    className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ${nuevoOrdenCategoria === 'todas' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                    Todas
+                  </button>
+                  {categorias.map(c => (
+                    <button key={c.id} onClick={() => setNuevoOrdenCategoria(c.id)}
+                      className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ${nuevoOrdenCategoria === c.id ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                      {c.nombre}
+                    </button>
+                  ))}
+                </div>
+                <div className="space-y-2">
+                  {platos.filter(p => p.activo && (nuevoOrdenCategoria === 'todas' || p.categoria_id === nuevoOrdenCategoria)).map(p => (
+                    <div key={p.id} className="flex items-center justify-between bg-white border border-gray-200 rounded-2xl px-4 py-2.5 gap-3">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-gray-900 truncate">{p.nombre}</p>
+                        <p className="text-xs font-bold text-purple-700">${p.precio.toLocaleString('es-CO')}</p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          onClick={() => setNuevoOrdenCarrito(prev => ({ ...prev, [p.id]: Math.max(0, (prev[p.id] ?? 0) - 1) }))}
+                          className="w-7 h-7 bg-gray-100 hover:bg-gray-200 rounded-full flex items-center justify-center">
+                          <Minus size={12} />
+                        </button>
+                        <span className="w-6 text-center font-black text-gray-900 text-sm">{nuevoOrdenCarrito[p.id] ?? 0}</span>
+                        <button
+                          onClick={() => setNuevoOrdenCarrito(prev => ({ ...prev, [p.id]: (prev[p.id] ?? 0) + 1 }))}
+                          className="w-7 h-7 bg-purple-600 hover:bg-purple-700 text-white rounded-full flex items-center justify-center">
+                          <Plus size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {platos.filter(p => p.activo).length === 0 && (
+                    <p className="text-center text-gray-400 text-sm py-6">Sin platos activos en la carta</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Notas */}
+              <div>
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Notas (opcional)</p>
+                <textarea value={nuevoOrdenNotas} onChange={e => setNuevoOrdenNotas(e.target.value)}
+                  placeholder="Sin sal, alérgico a..."
+                  rows={2}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 resize-none" />
+              </div>
+            </div>
+
+            {/* Footer: resumen + botón enviar */}
+            <div className="border-t px-5 py-4 shrink-0 bg-white space-y-3">
+              {Object.values(nuevoOrdenCarrito).some(v => v > 0) && (
+                <div className="flex justify-between items-center text-sm bg-gray-50 rounded-xl px-4 py-2.5">
+                  <span className="text-gray-500 font-medium">
+                    {Object.values(nuevoOrdenCarrito).reduce((a, v) => a + v, 0)} platos
+                    {nuevoOrdenTipo === 'mesa' && nuevoOrdenMesaId && (
+                      <span className="ml-1">· Mesa {mesas.find(m => m.id === nuevoOrdenMesaId)?.numero}</span>
+                    )}
+                  </span>
+                  <span className="font-black text-gray-900">
+                    ${Object.entries(nuevoOrdenCarrito).reduce((a, [id, qty]) => {
+                      const p = platos.find(pl => pl.id === id)
+                      return a + (p?.precio ?? 0) * qty
+                    }, 0).toLocaleString('es-CO')}
+                  </span>
+                </div>
+              )}
+              <button
+                onClick={tomarPedidoGerencia}
+                disabled={tomandoPedido || !Object.values(nuevoOrdenCarrito).some(v => v > 0)}
+                className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-bold py-3.5 rounded-2xl flex items-center justify-center gap-2 transition-all">
+                {tomandoPedido
+                  ? <><span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Enviando a cocina...</>
+                  : <><ChefHat size={18} /> Enviar a cocina</>}
+              </button>
             </div>
           </div>
         </div>
