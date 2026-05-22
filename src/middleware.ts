@@ -17,6 +17,11 @@ const RUTA_POR_ROL: Record<string, string> = {
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
+  // ── API routes: nunca redirigir, dejar pasar siempre ─────────
+  if (pathname.startsWith('/api/')) {
+    return NextResponse.next()
+  }
+
   // ── Páginas QR del cliente: siempre abiertas, sin login ──────
   if (RUTAS_CLIENTE_QR.some(r => pathname.startsWith(r))) {
     return NextResponse.next()
