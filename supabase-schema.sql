@@ -198,6 +198,21 @@ ON CONFLICT (clave) DO NOTHING;
 
 ALTER PUBLICATION supabase_realtime ADD TABLE configuracion;
 
+-- ─── MENÚ DE TURNO (plantilla de cantidades estándar) ───────
+-- Ejecutar en Supabase > SQL Editor
+CREATE TABLE IF NOT EXISTS plantillas_turno (
+  plato_id UUID PRIMARY KEY REFERENCES platos(id) ON DELETE CASCADE,
+  cantidad INT NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Fix doble descuento: eliminar trigger antes de recrearlo
+-- (si el schema se corrió varias veces, el trigger podría estar duplicado)
+DROP TRIGGER IF EXISTS trigger_descontar_inventario ON items_pedido;
+CREATE TRIGGER trigger_descontar_inventario
+  AFTER INSERT ON items_pedido
+  FOR EACH ROW EXECUTE FUNCTION descontar_inventario();
+
 -- ─── MIGRACIÓN: ROL DOMI + COLUMNAS PEDIDOS ──────────────────
 -- Ejecutar en Supabase > SQL Editor si ya tienes el schema anterior
 

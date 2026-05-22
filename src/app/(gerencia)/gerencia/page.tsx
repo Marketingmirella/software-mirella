@@ -7,7 +7,7 @@ import {
   BarChart3, TrendingUp, Users, DollarSign, Clock, ChefHat,
   Plus, X, Play, Square, MapPin, CheckCircle, Banknote,
   Pencil, Trash2, UtensilsCrossed, Timer, UserCircle, Search, Bike,
-  Download, SlidersHorizontal, CalendarDays, Settings, Lock
+  Download, SlidersHorizontal, CalendarDays, Settings, Lock, ClipboardList
 } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -123,6 +123,11 @@ export default function GerenciaPage() {
   const [cargandoClientes, setCargandoClientes] = useState(false)
   const [ordenClientes, setOrdenClientes] = useState<'mayor_consumo' | 'menor_consumo' | 'az' | 'cumpleanos'>('mayor_consumo')
   const [filtroMesCumple, setFiltroMesCumple] = useState<number>(0) // 0 = todos los meses
+
+  // Menú de turno (plantilla de cantidades estándar)
+  const [plantillaTurno, setPlantillaTurno] = useState<Record<string, number>>({})
+  const [modalPlantilla, setModalPlantilla] = useState(false)
+  const [guardandoPlantilla, setGuardandoPlantilla] = useState(false)
 
   // Permisos / configuración cocina
   const [bloqueoActivo, setBloqueoActivo] = useState(false)
@@ -313,6 +318,27 @@ export default function GerenciaPage() {
       if ('bloqueo_cocina_cantidad' in cfg) setBloqueoCantidad(parseInt(cfg['bloqueo_cocina_cantidad']) || 3)
     }
   }, [supabase])
+
+  // ── MENÚ DE TURNO ────────────────────────────────────────────
+  const cargarPlantilla = useCallback(async () => {
+    const { data } = await supabase.from('plantillas_turno').select('plato_id, cantidad')
+    if (data) {
+      const map: Record<string, number> = {}
+      ;(data as { plato_id: string; cantidad: number }[]).forEach(r => { map[r.plato_id] = r.cantidad })
+      setPlantillaTurno(map)
+    }
+  }, [supabase])
+
+  async function guardarPlantilla() {
+    setGuardandoPlantilla(true)
+    const rows = Object.entries(plantillaTurno).map(([plato_id, cantidad]) => ({ plato_id, cantidad }))
+    if (rows.length > 0) {
+      await supabase.from('plantillas_turno').upsert(rows, { onConflict: 'plato_id' })
+    }
+    toast.success('✅ Menú de turno guardado')
+    setGuardandoPlantilla(false)
+    setModalPlantilla(false)
+  }
 
   async function guardarConfiguracion() {
     setGuardandoPermisos(true)
@@ -514,13 +540,14 @@ export default function GerenciaPage() {
     cargarDatos(); cargarMesas(); cargarCarta()
     cargarResumen(hoyStr, hoyStr)
     cargarConfiguracion()
+    cargarPlantilla()
     const canal = supabase.channel('gerencia-rt')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'pedidos' }, () => { cargarDatos(); cargarMesas() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'mesas' }, cargarMesas)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'configuracion' }, cargarConfiguracion)
       .subscribe()
     return () => { supabase.removeChannel(canal) }
-  }, [cargarDatos, cargarMesas, cargarCarta, cargarResumen, cargarConfiguracion, supabase, hoyStr])
+  }, [cargarDatos, cargarMesas, cargarCarta, cargarResumen, cargarConfiguracion, cargarPlantilla, supabase, hoyStr])
 
   // Cargar resumen de inventario al abrir modal cerrar turno
   useEffect(() => {
@@ -733,15 +760,10 @@ export default function GerenciaPage() {
 
   // ── CAJA ─────────────────────────────────────────────────────
   async function irAInventario() {
-    // Pre-cargar cantidades actuales de inventario para el formulario
-    const { data: invActual } = await supabase.from('inventario').select('plato_id, cantidad_disponible')
-    if (invActual) {
-      const init: Record<string, number> = {}
-      ;(invActual as { plato_id: string; cantidad_disponible: number }[]).forEach(i => {
-        init[i.plato_id] = i.cantidad_disponible
-      })
-      setInventarioTurno(init)
-    }
+    // Pre-llenar desde la plantilla de turno (0 si el plato no está en la plantilla)
+    const init: Record<string, number> = {}
+    platos.forEach(p => { init[p.id] = plantillaTurno[p.id] ?? 0 })
+    setInventarioTurno(init)
     setPasoCaja('inventario')
   }
 
@@ -1235,11 +1257,16 @@ export default function GerenciaPage() {
         {/* ══ CARTA ══════════════════════════════════════════════ */}
         {seccion === 'carta' && (
           <div>
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center justify-between mb-4 gap-2">
               <h2 className="font-bold text-gray-900">Gestión de carta</h2>
-              <button onClick={abrirNuevoPlato} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2">
-                <Plus size={16} /> Nuevo plato
-              </button>
+              <div className="flex gap-2 shrink-0">
+                <button onClick={() => setModalPlantilla(true)} className="bg-orange-500 hover:bg-orange-600 text-white px-3 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5">
+                  <ClipboardList size={15} /> Menú turno
+                </button>
+                <button onClick={abrirNuevoPlato} className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5">
+                  <Plus size={15} /> Nuevo plato
+                </button>
+              </div>
             </div>
 
             {/* Filtro por categoría */}
@@ -2367,6 +2394,72 @@ export default function GerenciaPage() {
         </div>
       )}
 
+      {/* ══ MODAL MENÚ DE TURNO ══════════════════════════════════════ */}
+      {modalPlantilla && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-end justify-center p-0 md:p-4">
+          <div className="bg-white w-full md:max-w-lg md:rounded-3xl rounded-t-3xl max-h-[92vh] flex flex-col overflow-hidden fade-in">
+            <div className="flex items-center justify-between px-5 py-4 border-b shrink-0">
+              <div>
+                <h2 className="text-lg font-black text-gray-900">📋 Menú de turno</h2>
+                <p className="text-xs text-gray-400 mt-0.5">Cantidades estándar para cada plato al abrir turno</p>
+              </div>
+              <button onClick={() => setModalPlantilla(false)} className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center"><X size={18} /></button>
+            </div>
+            <div className="overflow-y-auto flex-1 px-5 py-4 space-y-5">
+              <div className="bg-orange-50 border border-orange-200 rounded-2xl px-4 py-3 text-xs text-orange-700 leading-relaxed">
+                💡 Define cuántas unidades preparas normalmente de cada plato. Al abrir un turno estas cantidades se pre-llenan automáticamente (puedes editarlas ese día).
+              </div>
+              {categorias.map(cat => {
+                const platosCategoria = platos.filter(p => p.activo && p.categoria_id === cat.id)
+                if (platosCategoria.length === 0) return null
+                return (
+                  <div key={cat.id}>
+                    <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">{cat.nombre}</p>
+                    <div className="space-y-2">
+                      {platosCategoria.map(p => (
+                        <div key={p.id} className="flex items-center justify-between bg-gray-50 rounded-xl px-3 py-2.5 gap-3">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-gray-800 truncate">{p.nombre}</p>
+                            <p className="text-xs text-gray-400">${p.precio.toLocaleString('es-CO')}</p>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              onClick={() => setPlantillaTurno(prev => ({ ...prev, [p.id]: Math.max(0, (prev[p.id] ?? 0) - 1) }))}
+                              className="w-7 h-7 bg-white border border-gray-200 rounded-full flex items-center justify-center text-gray-600 hover:bg-gray-100">
+                              <Minus size={12} />
+                            </button>
+                            <input
+                              type="number" min="0"
+                              value={plantillaTurno[p.id] ?? 0}
+                              onChange={e => setPlantillaTurno(prev => ({ ...prev, [p.id]: parseInt(e.target.value) || 0 }))}
+                              className="w-14 border border-gray-200 rounded-xl px-2 py-1.5 text-sm font-bold text-center focus:outline-none focus:ring-2 focus:ring-orange-400 bg-white"
+                            />
+                            <button
+                              onClick={() => setPlantillaTurno(prev => ({ ...prev, [p.id]: (prev[p.id] ?? 0) + 1 }))}
+                              className="w-7 h-7 bg-orange-500 text-white rounded-full flex items-center justify-center hover:bg-orange-600">
+                              <Plus size={12} />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+              {platos.filter(p => p.activo).length === 0 && (
+                <p className="text-center text-gray-400 text-sm py-8">Sin platos activos en la carta</p>
+              )}
+            </div>
+            <div className="px-5 py-4 border-t shrink-0">
+              <button onClick={guardarPlantilla} disabled={guardandoPlantilla}
+                className="w-full bg-orange-500 hover:bg-orange-600 disabled:bg-gray-300 text-white font-bold py-3 rounded-2xl">
+                {guardandoPlantilla ? 'Guardando...' : '💾 Guardar menú de turno'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ══ MODAL PLATO ══════════════════════════════════════════════ */}
       {modalPlato && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-end justify-center p-4">
@@ -2477,7 +2570,7 @@ export default function GerenciaPage() {
                               </div>
                               <input
                                 type="number" min="0"
-                                value={inventarioTurno[p.id] ?? ''}
+                                value={inventarioTurno[p.id] ?? 0}
                                 onChange={e => setInventarioTurno(prev => ({
                                   ...prev, [p.id]: parseInt(e.target.value) || 0
                                 }))}

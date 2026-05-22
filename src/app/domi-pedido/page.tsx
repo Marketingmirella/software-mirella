@@ -505,9 +505,11 @@ export default function DomiPedidoPage() {
 
       <div className="flex-1 p-4 space-y-3">
         {platosFiltrados.map(plato => {
-          const inv = (plato.inventario?.[0] as { cantidad_disponible: number } | undefined)
-          const disp = inv?.cantidad_disponible ?? 0
+          const invRow = plato.inventario?.[0] as { cantidad_disponible: number; alerta_minima: number } | undefined
+          const disp = invRow?.cantidad_disponible ?? 0
+          const alerta = invRow?.alerta_minima ?? 3
           const sinStock = disp === 0
+          const ultimasUnidades = !sinStock && disp <= alerta
           const enCarrito = carrito.find(i => i.plato.id === plato.id)
           return (
             <div key={plato.id} className={`bg-white rounded-2xl p-4 border flex items-center gap-3 shadow-sm ${sinStock ? 'opacity-50' : 'border-gray-100'}`}>
@@ -517,6 +519,7 @@ export default function DomiPedidoPage() {
                 {plato.descripcion && <p className="text-xs text-gray-400 mt-0.5 line-clamp-2">{plato.descripcion}</p>}
                 <p className="text-blue-500 font-bold mt-1">${plato.precio.toLocaleString('es-CO')}</p>
                 {sinStock && <p className="text-red-500 text-xs font-semibold mt-0.5">No disponible</p>}
+                {ultimasUnidades && <p className="text-orange-500 text-xs font-semibold mt-0.5">⚡ Últimas unidades</p>}
               </div>
               {!sinStock && (enCarrito ? (
                 <div className="flex items-center gap-1.5 shrink-0">

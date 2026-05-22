@@ -235,9 +235,11 @@ export default function DomiPage() {
       </div>
       <div className="flex-1 p-4 space-y-3">
         {platosFiltrados.map(plato => {
-          const inv = (plato.inventario?.[0] as { cantidad_disponible: number } | undefined)
-          const disp = inv?.cantidad_disponible ?? 0
+          const invRow = plato.inventario?.[0] as { cantidad_disponible: number; alerta_minima: number } | undefined
+          const disp = invRow?.cantidad_disponible ?? 0
+          const alerta = invRow?.alerta_minima ?? 3
           const sinStock = disp === 0
+          const stockBajo = !sinStock && disp <= alerta
           const enCarrito = carrito.find(i => i.plato.id === plato.id)
           return (
             <div key={plato.id} className={`bg-white rounded-2xl p-4 border flex items-center gap-3 ${sinStock ? 'opacity-50' : 'border-gray-100'}`}>
@@ -246,6 +248,8 @@ export default function DomiPage() {
                 <p className="font-semibold text-gray-900">{plato.nombre}</p>
                 <p className="text-blue-600 font-bold text-sm mt-0.5">${plato.precio.toLocaleString('es-CO')}</p>
                 {sinStock && <p className="text-red-500 text-xs font-semibold">Sin disponibilidad</p>}
+                {stockBajo && <p className="text-yellow-600 text-xs font-semibold">⚠️ Quedan {disp}</p>}
+                {!sinStock && !stockBajo && <p className="text-gray-400 text-xs">{disp} disponibles</p>}
               </div>
               {!sinStock && (enCarrito ? (
                 <div className="flex items-center gap-2">
