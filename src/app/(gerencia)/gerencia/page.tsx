@@ -818,8 +818,9 @@ export default function GerenciaPage() {
       // Recargar lista
       const { data: ul } = await supabase.from('usuarios').select('id, nombre, rol').order('nombre')
       if (ul) setListaUsuarios(ul)
-    } catch {
-      toast.error('Error de conexión al crear usuario')
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      toast.error('Error de conexión: ' + msg)
     }
     setCreandoUsuario(false)
   }
