@@ -760,7 +760,7 @@ export default function GerenciaPage() {
   const pedidoListoPagar = itemsSinListar.length === 0
 
   // ── CAJA ─────────────────────────────────────────────────────
-  async function irAInventario() {
+  function irAInventario() {
     // Pre-llenar desde la plantilla de turno (0 si el plato no está en la plantilla)
     const init: Record<string, number> = {}
     platos.forEach(p => { init[p.id] = plantillaTurno[p.id] ?? 0 })
