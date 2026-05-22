@@ -1174,6 +1174,14 @@ export default function GerenciaPage() {
       const { data: { user } } = await supabase.auth.getUser()
       let pedidoId: string
 
+      // Helper para crear pedido y obtener su id con manejo de error
+      const crearPedido = async (datos: Record<string, unknown>): Promise<string> => {
+        const { data: nuevo, error: errNuevo } = await supabase
+          .from('pedidos').insert(datos).select('id').single()
+        if (errNuevo || !nuevo) throw new Error(errNuevo?.message || 'No se pudo crear el pedido')
+        return nuevo.id
+      }
+
       if (nuevoOrdenTipo === 'mesa') {
         const mesa = mesas.find(m => m.id === nuevoOrdenMesaId)
         if (mesa && mesa.estado !== 'libre') {
@@ -1185,40 +1193,38 @@ export default function GerenciaPage() {
           if (ped) {
             pedidoId = ped.id
           } else {
-            const { data: nuevo } = await supabase.from('pedidos').insert({
-              mesa_id: nuevoOrdenMesaId, mesera_id: user?.id, turno_id: turnoActivo.id,
+            pedidoId = await crearPedido({
+              mesa_id: nuevoOrdenMesaId, mesera_id: user?.id || null, turno_id: turnoActivo.id,
               estado: 'pendiente', tipo: 'mesa', notas: nuevoOrdenNotas || null,
-            }).select('id').single()
-            pedidoId = nuevo!.id
+            })
             await supabase.from('mesas').update({ estado: 'ocupada' }).eq('id', nuevoOrdenMesaId!)
           }
         } else {
           // Mesa libre → crear nuevo pedido
-          const { data: nuevo } = await supabase.from('pedidos').insert({
-            mesa_id: nuevoOrdenMesaId, mesera_id: user?.id, turno_id: turnoActivo.id,
+          pedidoId = await crearPedido({
+            mesa_id: nuevoOrdenMesaId, mesera_id: user?.id || null, turno_id: turnoActivo.id,
             estado: 'pendiente', tipo: 'mesa', notas: nuevoOrdenNotas || null,
-          }).select('id').single()
-          pedidoId = nuevo!.id
+          })
           await supabase.from('mesas').update({ estado: 'ocupada' }).eq('id', nuevoOrdenMesaId!)
         }
       } else {
         // Domicilio
-        const { data: nuevo } = await supabase.from('pedidos').insert({
-          mesera_id: user?.id, turno_id: turnoActivo.id,
+        pedidoId = await crearPedido({
+          mesera_id: user?.id || null, turno_id: turnoActivo.id,
           estado: 'pendiente', tipo: 'domi', notas: nuevoOrdenNotas || null,
           cliente_nombre:    nuevoOrdenDomi.nombre    || null,
           cliente_telefono:  nuevoOrdenDomi.telefono  || null,
           cliente_direccion: nuevoOrdenDomi.direccion || null,
-        }).select('id').single()
-        pedidoId = nuevo!.id
+        })
       }
 
-      await supabase.from('items_pedido').insert(
+      const { error: errItems } = await supabase.from('items_pedido').insert(
         itemsCarrito.map(([platoId, qty]) => {
           const p = platos.find(pl => pl.id === platoId)!
           return { pedido_id: pedidoId, plato_id: platoId, cantidad: qty, precio_unitario: p.precio, estado: 'pendiente', pedido_por: user?.id || null }
         })
       )
+      if (errItems) throw new Error(errItems.message)
 
       toast.success('✅ Pedido enviado a cocina')
       setModalNuevoPedido(false)
@@ -1226,7 +1232,7 @@ export default function GerenciaPage() {
       setNuevoOrdenDomi({ nombre: '', telefono: '', direccion: '' })
       cargarMesas(); cargarDatos()
     } catch (e) {
-      toast.error('Error al tomar pedido: ' + String(e))
+      toast.error('Error: ' + (e instanceof Error ? e.message : String(e)))
     }
     setTomandoPedido(false)
   }
