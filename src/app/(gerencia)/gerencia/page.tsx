@@ -40,6 +40,11 @@ interface Plato {
   id: string; nombre: string; descripcion: string | null; precio: number; costo: number | null
   categoria_id: number; imagen_url: string | null; activo: boolean
 }
+interface MenuTurno {
+  id: string; nombre: string
+  items: { plato_id: string; cantidad: number }[]
+  created_at: string
+}
 
 type MetodoPago = 'efectivo' | 'nequi' | 'daviplata' | 'bancolombia'
 type Seccion = 'mesas' | 'carta' | 'resumen' | 'tiempos' | 'caja' | 'usuarios' | 'clientes' | 'permisos'
@@ -124,10 +129,16 @@ export default function GerenciaPage() {
   const [ordenClientes, setOrdenClientes] = useState<'mayor_consumo' | 'menor_consumo' | 'az' | 'cumpleanos'>('mayor_consumo')
   const [filtroMesCumple, setFiltroMesCumple] = useState<number>(0) // 0 = todos los meses
 
-  // Menú de turno (plantilla de cantidades estándar)
-  const [plantillaTurno, setPlantillaTurno] = useState<Record<string, number>>({})
-  const [modalPlantilla, setModalPlantilla] = useState(false)
-  const [guardandoPlantilla, setGuardandoPlantilla] = useState(false)
+  // Menús de turno (múltiples menús con nombre)
+  const [subSeccionCarta, setSubSeccionCarta] = useState<'carta' | 'menus'>('carta')
+  const [menusTurno, setMenusTurno] = useState<MenuTurno[]>([])
+  const [modalNuevoMenu, setModalNuevoMenu] = useState<'nuevo' | 'editar' | null>(null)
+  const [menuForm, setMenuForm] = useState<{ nombre: string; items: Record<string, number> }>({ nombre: '', items: {} })
+  const [editandoMenuId, setEditandoMenuId] = useState<string | null>(null)
+  const [guardandoMenu, setGuardandoMenu] = useState(false)
+  // Modo inventario al abrir turno
+  const [modoInventario, setModoInventario] = useState<'manual' | 'menu'>('manual')
+  const [menuSeleccionadoId, setMenuSeleccionadoId] = useState<string | null>(null)
 
   // Permisos / configuración cocina
   const [bloqueoActivo, setBloqueoActivo] = useState(false)
@@ -320,25 +331,47 @@ export default function GerenciaPage() {
     }
   }, [supabase])
 
-  // ── MENÚ DE TURNO ────────────────────────────────────────────
-  const cargarPlantilla = useCallback(async () => {
-    const { data } = await supabase.from('plantillas_turno').select('plato_id, cantidad')
-    if (data) {
-      const map: Record<string, number> = {}
-      ;(data as { plato_id: string; cantidad: number }[]).forEach(r => { map[r.plato_id] = r.cantidad })
-      setPlantillaTurno(map)
-    }
+  // ── MENÚS DE TURNO ───────────────────────────────────────────
+  const cargarMenusTurno = useCallback(async () => {
+    const { data } = await supabase.from('menus_turno').select('*').order('created_at', { ascending: false })
+    if (data) setMenusTurno(data as MenuTurno[])
   }, [supabase])
 
-  async function guardarPlantilla() {
-    setGuardandoPlantilla(true)
-    const rows = Object.entries(plantillaTurno).map(([plato_id, cantidad]) => ({ plato_id, cantidad }))
-    if (rows.length > 0) {
-      await supabase.from('plantillas_turno').upsert(rows, { onConflict: 'plato_id' })
+  async function guardarMenuTurno() {
+    if (!menuForm.nombre.trim()) { toast.error('Escribe un nombre para el menú'); return }
+    setGuardandoMenu(true)
+    const items = Object.entries(menuForm.items)
+      .filter(([, qty]) => qty > 0)
+      .map(([plato_id, cantidad]) => ({ plato_id, cantidad }))
+    if (editandoMenuId) {
+      await supabase.from('menus_turno').update({ nombre: menuForm.nombre.trim(), items }).eq('id', editandoMenuId)
+      toast.success('✅ Menú actualizado')
+    } else {
+      await supabase.from('menus_turno').insert({ nombre: menuForm.nombre.trim(), items })
+      toast.success('✅ Menú creado')
     }
-    toast.success('✅ Menú de turno guardado')
-    setGuardandoPlantilla(false)
-    setModalPlantilla(false)
+    setGuardandoMenu(false)
+    setModalNuevoMenu(null)
+    setEditandoMenuId(null)
+    setMenuForm({ nombre: '', items: {} })
+    await cargarMenusTurno()
+  }
+
+  async function eliminarMenuTurno(id: string, nombre: string) {
+    if (!confirm(`¿Eliminar el menú "${nombre}"? Esta acción no se puede deshacer.`)) return
+    await supabase.from('menus_turno').delete().eq('id', id)
+    toast.success('Menú eliminado')
+    await cargarMenusTurno()
+  }
+
+  function aplicarMenuTurno(menuId: string) {
+    const menu = menusTurno.find(m => m.id === menuId)
+    if (!menu) return
+    const init: Record<string, number> = {}
+    platos.forEach(p => { init[p.id] = 0 })
+    menu.items.forEach(item => { init[item.plato_id] = item.cantidad })
+    setInventarioTurno(init)
+    setMenuSeleccionadoId(menuId)
   }
 
   async function guardarConfiguracion() {
@@ -541,14 +574,14 @@ export default function GerenciaPage() {
     cargarDatos(); cargarMesas(); cargarCarta()
     cargarResumen(hoyStr, hoyStr)
     cargarConfiguracion()
-    cargarPlantilla()
+    cargarMenusTurno()
     const canal = supabase.channel('gerencia-rt')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'pedidos' }, () => { cargarDatos(); cargarMesas() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'mesas' }, cargarMesas)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'configuracion' }, cargarConfiguracion)
       .subscribe()
     return () => { supabase.removeChannel(canal) }
-  }, [cargarDatos, cargarMesas, cargarCarta, cargarResumen, cargarConfiguracion, cargarPlantilla, supabase, hoyStr])
+  }, [cargarDatos, cargarMesas, cargarCarta, cargarResumen, cargarConfiguracion, cargarMenusTurno, supabase, hoyStr])
 
   // Cargar resumen de inventario al abrir modal cerrar turno
   useEffect(() => {
@@ -761,10 +794,11 @@ export default function GerenciaPage() {
 
   // ── CAJA ─────────────────────────────────────────────────────
   function irAInventario() {
-    // Pre-llenar desde la plantilla de turno (0 si el plato no está en la plantilla)
     const init: Record<string, number> = {}
-    platos.forEach(p => { init[p.id] = plantillaTurno[p.id] ?? 0 })
+    platos.forEach(p => { init[p.id] = 0 })
     setInventarioTurno(init)
+    setModoInventario('manual')
+    setMenuSeleccionadoId(null)
     setPasoCaja('inventario')
   }
 
@@ -1264,63 +1298,148 @@ export default function GerenciaPage() {
         {/* ══ CARTA ══════════════════════════════════════════════ */}
         {seccion === 'carta' && (
           <div>
-            <div className="flex items-center justify-between mb-4 gap-2">
-              <h2 className="font-bold text-gray-900">Gestión de carta</h2>
-              <div className="flex gap-2 shrink-0">
-                <button onClick={() => setModalPlantilla(true)} className="bg-orange-500 hover:bg-orange-600 text-white px-3 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5">
-                  <ClipboardList size={15} /> Menú turno
-                </button>
-                <button onClick={abrirNuevoPlato} className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5">
-                  <Plus size={15} /> Nuevo plato
-                </button>
-              </div>
-            </div>
-
-            {/* Filtro por categoría */}
-            <div className="flex gap-2 mb-4 overflow-x-auto">
-              <button onClick={() => setCategoriaActivaCarta('todas')}
-                className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap ${categoriaActivaCarta === 'todas' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600'}`}>
-                Todas
+            {/* Tabs de subsección */}
+            <div className="flex gap-2 mb-4">
+              <button onClick={() => setSubSeccionCarta('carta')}
+                className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-1.5 ${subSeccionCarta === 'carta' ? 'bg-purple-600 text-white shadow-sm' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>
+                <UtensilsCrossed size={15} /> Carta general
               </button>
-              {categorias.map(c => (
-                <button key={c.id} onClick={() => setCategoriaActivaCarta(c.id)}
-                  className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap ${categoriaActivaCarta === c.id ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600'}`}>
-                  {c.nombre}
-                </button>
-              ))}
+              <button onClick={() => setSubSeccionCarta('menus')}
+                className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-1.5 ${subSeccionCarta === 'menus' ? 'bg-orange-500 text-white shadow-sm' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>
+                <ClipboardList size={15} /> Menús de turno
+              </button>
             </div>
 
-            <div className="space-y-2">
-              {platosFiltradosCarta.map(plato => {
-                const margen = utilidadPlato(plato)
-                return (
-                  <div key={plato.id} className={`bg-white rounded-2xl p-4 border ${plato.activo ? 'border-gray-100' : 'border-gray-200 opacity-60'}`}>
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <p className="font-semibold text-gray-900">{plato.nombre}</p>
-                          {!plato.activo && <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full">Inactivo</span>}
-                          {margen && <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${parseInt(margen) >= 50 ? 'bg-green-100 text-green-700' : parseInt(margen) >= 30 ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'}`}>{margen}% margen</span>}
+            {/* ── SUBSECCIÓN: CARTA GENERAL ── */}
+            {subSeccionCarta === 'carta' && (
+              <div>
+                <div className="flex items-center justify-between mb-4 gap-2">
+                  <h2 className="font-bold text-gray-900">Gestión de carta</h2>
+                  <button onClick={abrirNuevoPlato} className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5">
+                    <Plus size={15} /> Nuevo plato
+                  </button>
+                </div>
+
+                {/* Filtro por categoría */}
+                <div className="flex gap-2 mb-4 overflow-x-auto">
+                  <button onClick={() => setCategoriaActivaCarta('todas')}
+                    className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap ${categoriaActivaCarta === 'todas' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                    Todas
+                  </button>
+                  {categorias.map(c => (
+                    <button key={c.id} onClick={() => setCategoriaActivaCarta(c.id)}
+                      className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap ${categoriaActivaCarta === c.id ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                      {c.nombre}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="space-y-2">
+                  {platosFiltradosCarta.map(plato => {
+                    const margen = utilidadPlato(plato)
+                    return (
+                      <div key={plato.id} className={`bg-white rounded-2xl p-4 border ${plato.activo ? 'border-gray-100' : 'border-gray-200 opacity-60'}`}>
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="font-semibold text-gray-900">{plato.nombre}</p>
+                              {!plato.activo && <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full">Inactivo</span>}
+                              {margen && <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${parseInt(margen) >= 50 ? 'bg-green-100 text-green-700' : parseInt(margen) >= 30 ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'}`}>{margen}% margen</span>}
+                            </div>
+                            {plato.descripcion && <p className="text-xs text-gray-400 mt-0.5 truncate">{plato.descripcion}</p>}
+                            <div className="flex gap-4 mt-1">
+                              <span className="text-sm font-bold text-gray-900">${plato.precio.toLocaleString('es-CO')} <span className="font-normal text-gray-400">precio</span></span>
+                              {plato.costo ? <span className="text-sm text-gray-500">${plato.costo.toLocaleString('es-CO')} <span className="text-gray-400">costo</span></span> : <span className="text-xs text-orange-400">Sin costo registrado</span>}
+                            </div>
+                            <p className="text-xs text-gray-400 mt-0.5">{categorias.find(c => c.id === plato.categoria_id)?.nombre}</p>
+                          </div>
+                          <div className="flex gap-1 shrink-0">
+                            <button onClick={() => abrirEditarPlato(plato)} className="w-8 h-8 bg-gray-100 hover:bg-gray-200 rounded-xl flex items-center justify-center"><Pencil size={14} className="text-gray-600" /></button>
+                            <button onClick={() => toggleActivoPlato(plato)} className={`w-8 h-8 rounded-xl flex items-center justify-center ${plato.activo ? 'bg-orange-100 hover:bg-orange-200' : 'bg-green-100 hover:bg-green-200'}`}>
+                              {plato.activo ? <X size={14} className="text-orange-600" /> : <CheckCircle size={14} className="text-green-600" />}
+                            </button>
+                            <button onClick={() => eliminarPlato(plato)} className="w-8 h-8 bg-red-50 hover:bg-red-100 rounded-xl flex items-center justify-center"><Trash2 size={14} className="text-red-500" /></button>
+                          </div>
                         </div>
-                        {plato.descripcion && <p className="text-xs text-gray-400 mt-0.5 truncate">{plato.descripcion}</p>}
-                        <div className="flex gap-4 mt-1">
-                          <span className="text-sm font-bold text-gray-900">${plato.precio.toLocaleString('es-CO')} <span className="font-normal text-gray-400">precio</span></span>
-                          {plato.costo ? <span className="text-sm text-gray-500">${plato.costo.toLocaleString('es-CO')} <span className="text-gray-400">costo</span></span> : <span className="text-xs text-orange-400">Sin costo registrado</span>}
-                        </div>
-                        <p className="text-xs text-gray-400 mt-0.5">{categorias.find(c => c.id === plato.categoria_id)?.nombre}</p>
                       </div>
-                      <div className="flex gap-1 shrink-0">
-                        <button onClick={() => abrirEditarPlato(plato)} className="w-8 h-8 bg-gray-100 hover:bg-gray-200 rounded-xl flex items-center justify-center"><Pencil size={14} className="text-gray-600" /></button>
-                        <button onClick={() => toggleActivoPlato(plato)} className={`w-8 h-8 rounded-xl flex items-center justify-center ${plato.activo ? 'bg-orange-100 hover:bg-orange-200' : 'bg-green-100 hover:bg-green-200'}`}>
-                          {plato.activo ? <X size={14} className="text-orange-600" /> : <CheckCircle size={14} className="text-green-600" />}
-                        </button>
-                        <button onClick={() => eliminarPlato(plato)} className="w-8 h-8 bg-red-50 hover:bg-red-100 rounded-xl flex items-center justify-center"><Trash2 size={14} className="text-red-500" /></button>
-                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* ── SUBSECCIÓN: MENÚS DE TURNO ── */}
+            {subSeccionCarta === 'menus' && (
+              <div>
+                <div className="flex items-center justify-between mb-3 gap-2">
+                  <h2 className="font-bold text-gray-900">Menús de turno</h2>
+                  <button
+                    onClick={() => { setModalNuevoMenu('nuevo'); setEditandoMenuId(null); setMenuForm({ nombre: '', items: {} }) }}
+                    className="bg-orange-500 hover:bg-orange-600 text-white px-3 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5">
+                    <Plus size={15} /> Nuevo menú
+                  </button>
+                </div>
+
+                <div className="bg-orange-50 border border-orange-200 rounded-2xl px-4 py-3 text-xs text-orange-700 leading-relaxed mb-4">
+                  💡 Crea menús con nombre para tener tus plantillas de cantidad por día o temporada. Al abrir el turno puedes escoger uno de la lista o ingresar cantidades manualmente.
+                </div>
+
+                <div className="space-y-3">
+                  {menusTurno.length === 0 && (
+                    <div className="text-center py-12 text-gray-400">
+                      <ClipboardList size={36} className="mx-auto mb-3 opacity-25" />
+                      <p className="text-sm font-medium">No hay menús creados todavía</p>
+                      <p className="text-xs mt-1">Toca "Nuevo menú" para crear el primero</p>
                     </div>
-                  </div>
-                )
-              })}
-            </div>
+                  )}
+                  {menusTurno.map(menu => {
+                    const itemsConCantidad = menu.items.filter(i => i.cantidad > 0)
+                    const totalUnidades = menu.items.reduce((a, i) => a + i.cantidad, 0)
+                    return (
+                      <div key={menu.id} className="bg-white rounded-2xl border border-gray-100 p-4">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <p className="font-black text-gray-900 text-base">{menu.nombre}</p>
+                            <p className="text-xs text-gray-400 mt-0.5">
+                              {itemsConCantidad.length} platos · {totalUnidades} unidades totales
+                            </p>
+                            <div className="flex flex-wrap gap-1 mt-2">
+                              {itemsConCantidad.slice(0, 5).map(item => {
+                                const plato = platos.find(p => p.id === item.plato_id)
+                                if (!plato) return null
+                                return (
+                                  <span key={item.plato_id} className="text-xs bg-orange-50 text-orange-700 border border-orange-100 px-2 py-0.5 rounded-full">
+                                    {plato.nombre} ×{item.cantidad}
+                                  </span>
+                                )
+                              })}
+                              {itemsConCantidad.length > 5 && (
+                                <span className="text-xs text-gray-400 px-1">+{itemsConCantidad.length - 5} más</span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex gap-1 shrink-0">
+                            <button onClick={() => {
+                              const items: Record<string, number> = {}
+                              menu.items.forEach(i => { items[i.plato_id] = i.cantidad })
+                              setMenuForm({ nombre: menu.nombre, items })
+                              setEditandoMenuId(menu.id)
+                              setModalNuevoMenu('editar')
+                            }} className="w-8 h-8 bg-gray-100 hover:bg-gray-200 rounded-xl flex items-center justify-center">
+                              <Pencil size={14} className="text-gray-600" />
+                            </button>
+                            <button onClick={() => eliminarMenuTurno(menu.id, menu.nombre)}
+                              className="w-8 h-8 bg-red-50 hover:bg-red-100 rounded-xl flex items-center justify-center">
+                              <Trash2 size={14} className="text-red-500" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -2401,21 +2520,33 @@ export default function GerenciaPage() {
         </div>
       )}
 
-      {/* ══ MODAL MENÚ DE TURNO ══════════════════════════════════════ */}
-      {modalPlantilla && (
+      {/* ══ MODAL NUEVO / EDITAR MENÚ DE TURNO ══════════════════════ */}
+      {modalNuevoMenu && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-end justify-center p-0 md:p-4">
           <div className="bg-white w-full md:max-w-lg md:rounded-3xl rounded-t-3xl max-h-[92vh] flex flex-col overflow-hidden fade-in">
             <div className="flex items-center justify-between px-5 py-4 border-b shrink-0">
               <div>
-                <h2 className="text-lg font-black text-gray-900">📋 Menú de turno</h2>
-                <p className="text-xs text-gray-400 mt-0.5">Cantidades estándar para cada plato al abrir turno</p>
+                <h2 className="text-lg font-black text-gray-900">
+                  {modalNuevoMenu === 'editar' ? '✏️ Editar menú' : '📋 Nuevo menú de turno'}
+                </h2>
+                <p className="text-xs text-gray-400 mt-0.5">Define cantidades estándar por plato</p>
               </div>
-              <button onClick={() => setModalPlantilla(false)} className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center"><X size={18} /></button>
+              <button onClick={() => { setModalNuevoMenu(null); setEditandoMenuId(null); setMenuForm({ nombre: '', items: {} }) }}
+                className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center"><X size={18} /></button>
             </div>
             <div className="overflow-y-auto flex-1 px-5 py-4 space-y-5">
-              <div className="bg-orange-50 border border-orange-200 rounded-2xl px-4 py-3 text-xs text-orange-700 leading-relaxed">
-                💡 Define cuántas unidades preparas normalmente de cada plato. Al abrir un turno estas cantidades se pre-llenan automáticamente (puedes editarlas ese día).
+              {/* Nombre del menú */}
+              <div>
+                <label className="text-xs font-bold text-gray-500 uppercase tracking-wide block mb-1.5">Nombre del menú</label>
+                <input
+                  type="text"
+                  placeholder="Ej: Entre semana, Fin de semana, Festivo..."
+                  value={menuForm.nombre}
+                  onChange={e => setMenuForm(prev => ({ ...prev, nombre: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-orange-400"
+                />
               </div>
+              {/* Cantidades por plato */}
               {categorias.map(cat => {
                 const platosCategoria = platos.filter(p => p.activo && p.categoria_id === cat.id)
                 if (platosCategoria.length === 0) return null
@@ -2431,18 +2562,18 @@ export default function GerenciaPage() {
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
                             <button
-                              onClick={() => setPlantillaTurno(prev => ({ ...prev, [p.id]: Math.max(0, (prev[p.id] ?? 0) - 1) }))}
+                              onClick={() => setMenuForm(prev => ({ ...prev, items: { ...prev.items, [p.id]: Math.max(0, (prev.items[p.id] ?? 0) - 1) } }))}
                               className="w-7 h-7 bg-white border border-gray-200 rounded-full flex items-center justify-center text-gray-600 hover:bg-gray-100">
                               <Minus size={12} />
                             </button>
                             <input
                               type="number" min="0"
-                              value={plantillaTurno[p.id] ?? 0}
-                              onChange={e => setPlantillaTurno(prev => ({ ...prev, [p.id]: parseInt(e.target.value) || 0 }))}
+                              value={menuForm.items[p.id] ?? 0}
+                              onChange={e => setMenuForm(prev => ({ ...prev, items: { ...prev.items, [p.id]: parseInt(e.target.value) || 0 } }))}
                               className="w-14 border border-gray-200 rounded-xl px-2 py-1.5 text-sm font-bold text-center focus:outline-none focus:ring-2 focus:ring-orange-400 bg-white"
                             />
                             <button
-                              onClick={() => setPlantillaTurno(prev => ({ ...prev, [p.id]: (prev[p.id] ?? 0) + 1 }))}
+                              onClick={() => setMenuForm(prev => ({ ...prev, items: { ...prev.items, [p.id]: (prev.items[p.id] ?? 0) + 1 } }))}
                               className="w-7 h-7 bg-orange-500 text-white rounded-full flex items-center justify-center hover:bg-orange-600">
                               <Plus size={12} />
                             </button>
@@ -2458,9 +2589,9 @@ export default function GerenciaPage() {
               )}
             </div>
             <div className="px-5 py-4 border-t shrink-0">
-              <button onClick={guardarPlantilla} disabled={guardandoPlantilla}
+              <button onClick={guardarMenuTurno} disabled={guardandoMenu}
                 className="w-full bg-orange-500 hover:bg-orange-600 disabled:bg-gray-300 text-white font-bold py-3 rounded-2xl">
-                {guardandoPlantilla ? 'Guardando...' : '💾 Guardar menú de turno'}
+                {guardandoMenu ? 'Guardando...' : modalNuevoMenu === 'editar' ? '💾 Actualizar menú' : '💾 Guardar menú'}
               </button>
             </div>
           </div>
@@ -2559,9 +2690,55 @@ export default function GerenciaPage() {
               /* ── Paso 2: Inventario ── */
               <>
                 <div className="overflow-y-auto flex-1 px-4 py-3 space-y-4">
-                  <p className="text-sm text-gray-500 bg-yellow-50 border border-yellow-200 rounded-xl px-3 py-2.5">
-                    ✏️ Escribe cuántas unidades hay de cada plato <strong>al abrir el turno</strong>. El sistema las descontará automáticamente con cada pedido.
-                  </p>
+
+                  {/* Selector de modo */}
+                  <div className="flex gap-2">
+                    <button onClick={() => { setModoInventario('manual'); setMenuSeleccionadoId(null) }}
+                      className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-1.5 ${modoInventario === 'manual' ? 'bg-green-500 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                      ✏️ Manual
+                    </button>
+                    <button onClick={() => setModoInventario('menu')}
+                      className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-1.5 ${modoInventario === 'menu' ? 'bg-orange-500 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                      <ClipboardList size={14} /> Desde menú
+                    </button>
+                  </div>
+
+                  {/* Picker de menú guardado */}
+                  {modoInventario === 'menu' && (
+                    <div className="space-y-2">
+                      {menusTurno.length === 0 ? (
+                        <div className="bg-orange-50 border border-orange-200 rounded-xl px-4 py-3 text-sm text-orange-700 leading-relaxed">
+                          No hay menús de turno creados aún. Ve a <strong>Carta → Menús de turno</strong> para crear uno.
+                        </div>
+                      ) : (
+                        <>
+                          <p className="text-xs text-gray-500 font-medium">Selecciona el menú para precargar cantidades:</p>
+                          {menusTurno.map(menu => (
+                            <button key={menu.id} onClick={() => aplicarMenuTurno(menu.id)}
+                              className={`w-full text-left p-3 rounded-xl border-2 transition-all ${menuSeleccionadoId === menu.id ? 'border-orange-500 bg-orange-50' : 'border-gray-200 bg-white hover:border-orange-300'}`}>
+                              <p className="font-bold text-gray-900">{menu.nombre}</p>
+                              <p className="text-xs text-gray-400 mt-0.5">
+                                {menu.items.filter(i => i.cantidad > 0).length} platos · {menu.items.reduce((a, i) => a + i.cantidad, 0)} unidades
+                              </p>
+                            </button>
+                          ))}
+                          {menuSeleccionadoId && (
+                            <div className="bg-green-50 border border-green-200 rounded-xl px-3 py-2 text-xs text-green-700">
+                              ✅ Cantidades cargadas. Puedes ajustarlas abajo antes de abrir.
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {modoInventario === 'manual' && (
+                    <p className="text-sm text-gray-500 bg-yellow-50 border border-yellow-200 rounded-xl px-3 py-2.5">
+                      ✏️ Escribe cuántas unidades hay de cada plato <strong>al abrir el turno</strong>. El sistema las descontará automáticamente con cada pedido.
+                    </p>
+                  )}
+
+                  {/* Lista de platos — siempre visible para ajustar */}
                   {categorias.map(cat => {
                     const platosCategoria = platos.filter(p => p.activo && p.categoria_id === cat.id)
                     if (platosCategoria.length === 0) return null
