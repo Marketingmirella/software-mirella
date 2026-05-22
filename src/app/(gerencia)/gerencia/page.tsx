@@ -7,7 +7,8 @@ import {
   BarChart3, TrendingUp, Users, DollarSign, Clock, ChefHat,
   Plus, Minus, X, Play, Square, MapPin, CheckCircle, Banknote,
   Pencil, Trash2, UtensilsCrossed, Timer, UserCircle, Search, Bike,
-  Download, SlidersHorizontal, CalendarDays, Settings, Lock, ClipboardList
+  Download, SlidersHorizontal, CalendarDays, Settings, Lock, ClipboardList,
+  LogOut, AlertTriangle, RotateCcw, ShieldAlert
 } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -145,6 +146,17 @@ export default function GerenciaPage() {
   const [bloqueoActivo, setBloqueoActivo] = useState(false)
   const [bloqueoCantidad, setBloqueoCantidad] = useState(3)
   const [guardandoPermisos, setGuardandoPermisos] = useState(false)
+
+  // Panel de configuración ⚙️
+  const [modalSettings, setModalSettings] = useState(false)
+  const [seccionSettings, setSeccionSettings] = useState<'cuenta' | 'usuarios' | 'permisos' | 'restablecer'>('cuenta')
+  // Restablecer negocio
+  const [restablecerScope, setRestablecerScope] = useState<'todo' | 'desde_fecha'>('todo')
+  const [restablecerFecha, setRestablecerFecha] = useState('')
+  const [restablecerItems, setRestablecerItems] = useState({ pedidos: false, turnos: false, clientes: false, inventario: false })
+  const [restablecerConfirm, setRestablecerConfirm] = useState('')
+  const [restableciendo, setRestableciendo] = useState(false)
+  const [pasoRestablecer, setPasoRestablecer] = useState<'opciones' | 'confirmar'>('opciones')
 
   // Gestión de zonas y mesas
   const [modoGestionMesas, setModoGestionMesas] = useState(false)
@@ -373,6 +385,68 @@ export default function GerenciaPage() {
     menu.items.forEach(item => { init[item.plato_id] = item.cantidad })
     setInventarioTurno(init)
     setMenuSeleccionadoId(menuId)
+  }
+
+  async function cerrarSesion() {
+    await supabase.auth.signOut()
+    window.location.href = '/login'
+  }
+
+  async function ejecutarRestablecer() {
+    if (restablecerConfirm !== 'BORRAR') { toast.error('Escribe BORRAR para confirmar'); return }
+    const alguno = Object.values(restablecerItems).some(Boolean)
+    if (!alguno) { toast.error('Selecciona al menos un tipo de datos'); return }
+    setRestableciendo(true)
+    try {
+      const desde = restablecerScope === 'desde_fecha' && restablecerFecha
+        ? `${restablecerFecha}T00:00:00.000Z`
+        : '2000-01-01T00:00:00.000Z'  // efectivamente todo
+
+      if (restablecerItems.pedidos) {
+        // Borrar en orden correcto para no romper FK
+        const { data: pedidosIds } = await supabase.from('pedidos').select('id').gte('created_at', desde)
+        const ids = (pedidosIds || []).map((p: { id: string }) => p.id)
+        if (ids.length > 0) {
+          await Promise.all([
+            supabase.from('pagos').delete().in('pedido_id', ids),
+            supabase.from('items_pedido').delete().in('pedido_id', ids),
+          ])
+          await supabase.from('pedidos').delete().in('id', ids)
+        }
+      }
+
+      if (restablecerItems.turnos) {
+        const { data: turnosIds } = await supabase.from('turnos').select('id').gte('abierto_en', desde)
+        const ids = (turnosIds || []).map((t: { id: string }) => t.id)
+        if (ids.length > 0) {
+          await Promise.all([
+            supabase.from('movimientos_caja').delete().in('turno_id', ids),
+            supabase.from('turnos_inventario').delete().in('turno_id', ids),
+          ])
+          await supabase.from('turnos').delete().in('id', ids)
+        }
+      }
+
+      if (restablecerItems.clientes) {
+        // Desligar pedidos antes de borrar clientes
+        await supabase.from('pedidos').update({ cliente_id: null }).not('cliente_id', 'is', null)
+        await supabase.from('clientes').delete().not('id', 'is', null)
+      }
+
+      if (restablecerItems.inventario) {
+        await supabase.from('inventario').update({ cantidad_disponible: 0 }).not('plato_id', 'is', null)
+      }
+
+      toast.success('✅ Datos restablecidos correctamente')
+      setRestablecerConfirm('')
+      setRestablecerItems({ pedidos: false, turnos: false, clientes: false, inventario: false })
+      setPasoRestablecer('opciones')
+      setModalSettings(false)
+      await cargarDatos(); await cargarMesas()
+    } catch (e) {
+      toast.error('Error al restablecer: ' + String(e))
+    }
+    setRestableciendo(false)
   }
 
   async function guardarConfiguracion() {
@@ -1120,8 +1194,6 @@ export default function GerenciaPage() {
     { id: 'tiempos',  label: 'Tiempos',  icon: <Timer size={16} />           },
     { id: 'clientes', label: 'Clientes', icon: <UserCircle size={16} />      },
     { id: 'caja',     label: 'Caja',     icon: <DollarSign size={16} />      },
-    { id: 'usuarios', label: 'Usuarios', icon: <Plus size={16} />            },
-    { id: 'permisos', label: 'Permisos', icon: <Lock size={16} />            },
   ]
 
   return (
@@ -1135,8 +1207,21 @@ export default function GerenciaPage() {
             <p className="text-xs text-gray-400">{new Date().toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
           </div>
         </div>
-        <div className={`px-3 py-1 rounded-full text-xs font-bold ${turnoActivo ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-          {turnoActivo ? '● Turno abierto' : '○ Sin turno'}
+        <div className="flex items-center gap-2">
+          <div className={`px-3 py-1 rounded-full text-xs font-bold ${turnoActivo ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+            {turnoActivo ? '● Turno abierto' : '○ Sin turno'}
+          </div>
+          <button onClick={() => {
+              setModalSettings(true)
+              setSeccionSettings('cuenta')
+              // Cargar usuarios al abrir settings
+              supabase.from('usuarios').select('id, nombre, rol, activo').order('nombre').then(({ data }) => {
+                if (data) setListaUsuarios(data)
+              })
+            }}
+            className="w-9 h-9 bg-gray-100 hover:bg-gray-200 rounded-xl flex items-center justify-center transition-colors">
+            <Settings size={18} className="text-gray-600" />
+          </button>
         </div>
       </div>
 
@@ -3176,6 +3261,270 @@ export default function GerenciaPage() {
           </div>
         )
       })()}
+
+      {/* ══ MODAL CONFIGURACIÓN ⚙️ ══════════════════════════════════ */}
+      {modalSettings && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-end justify-center p-0">
+          <div className="bg-white w-full max-w-lg rounded-t-3xl max-h-[92vh] flex flex-col overflow-hidden fade-in">
+
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b shrink-0">
+              <div className="flex items-center gap-2">
+                <Settings size={20} className="text-gray-700" />
+                <h2 className="text-lg font-black text-gray-900">Configuración</h2>
+              </div>
+              <button onClick={() => setModalSettings(false)} className="w-9 h-9 bg-gray-100 rounded-full flex items-center justify-center"><X size={18} /></button>
+            </div>
+
+            {/* Tabs */}
+            <div className="flex gap-1 px-4 py-2 border-b shrink-0 overflow-x-auto">
+              {([
+                ['cuenta',      '👤 Cuenta'],
+                ['usuarios',    '👥 Usuarios'],
+                ['permisos',    '🔒 Permisos'],
+                ['restablecer', '⚠️ Restablecer'],
+              ] as ['cuenta'|'usuarios'|'permisos'|'restablecer', string][]).map(([id, label]) => (
+                <button key={id} onClick={() => setSeccionSettings(id)}
+                  className={`px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+                    seccionSettings === id
+                      ? id === 'restablecer' ? 'bg-red-500 text-white' : 'bg-purple-600 text-white'
+                      : 'text-gray-500 hover:bg-gray-100'
+                  }`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div className="overflow-y-auto flex-1 px-5 py-5 space-y-4">
+
+              {/* ── CUENTA ── */}
+              {seccionSettings === 'cuenta' && (
+                <div className="space-y-4">
+                  <div className="bg-purple-50 rounded-2xl p-4 flex items-center gap-4">
+                    <div className="w-14 h-14 bg-purple-600 rounded-full flex items-center justify-center text-white text-2xl font-black">G</div>
+                    <div>
+                      <p className="font-black text-gray-900">Gerencia</p>
+                      <p className="text-xs text-gray-400">Administrador del sistema</p>
+                    </div>
+                  </div>
+                  <button onClick={cerrarSesion}
+                    className="w-full flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 border-2 border-red-200 text-red-600 font-bold py-3.5 rounded-2xl transition-colors">
+                    <LogOut size={18} /> Cerrar sesión
+                  </button>
+                </div>
+              )}
+
+              {/* ── USUARIOS ── */}
+              {seccionSettings === 'usuarios' && (
+                <div className="space-y-4">
+                  <button onClick={() => setModalUsuario(true)}
+                    className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3.5 rounded-2xl flex items-center justify-center gap-2 transition-colors">
+                    <Plus size={18} /> Crear nuevo usuario
+                  </button>
+                  {listaUsuarios.length === 0 ? (
+                    <div className="bg-white rounded-2xl border border-gray-100 p-6 text-center">
+                      <p className="text-gray-400 text-sm">No hay usuarios registrados.</p>
+                    </div>
+                  ) : (
+                    <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+                      {listaUsuarios.map((u, i) => {
+                        const ROL_BADGE: Record<string, string> = {
+                          gerente: 'bg-purple-100 text-purple-700',
+                          mesera:  'bg-orange-100 text-orange-700',
+                          cocina:  'bg-green-100 text-green-700',
+                          domi:    'bg-blue-100 text-blue-700',
+                        }
+                        const ROL_LABEL: Record<string, string> = {
+                          gerente: 'Gerente', mesera: 'Mesera', cocina: 'Cocina', domi: 'Domi',
+                        }
+                        return (
+                          <div key={u.id} className={`flex items-center justify-between px-4 py-3.5 ${i !== 0 ? 'border-t border-gray-50' : ''} ${!u.activo ? 'opacity-50' : ''}`}>
+                            <div className="flex items-center gap-3">
+                              <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm ${u.activo ? 'bg-gray-100 text-gray-500' : 'bg-red-100 text-red-400'}`}>
+                                {u.nombre.charAt(0).toUpperCase()}
+                              </div>
+                              <div>
+                                <p className="font-medium text-gray-900 text-sm">{u.nombre}</p>
+                                {!u.activo && <p className="text-xs text-red-500 font-medium">Inhabilitado</p>}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${ROL_BADGE[u.rol] || 'bg-gray-100 text-gray-600'}`}>
+                                {ROL_LABEL[u.rol] || u.rol}
+                              </span>
+                              <button onClick={() => setEditandoUsuario({ id: u.id, nombre: u.nombre, rol: u.rol, activo: u.activo ?? true, nuevaPassword: '' })}
+                                className="w-7 h-7 bg-gray-100 hover:bg-gray-200 rounded-lg flex items-center justify-center">
+                                <Pencil size={13} className="text-gray-500" />
+                              </button>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── PERMISOS ── */}
+              {seccionSettings === 'permisos' && (
+                <div className="space-y-4">
+                  <div className="bg-white rounded-2xl border border-gray-100 p-5 space-y-5">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-purple-100 rounded-xl flex items-center justify-center">
+                        <Lock size={20} className="text-purple-600" />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-gray-900">Control de flujo — Cocina</h3>
+                        <p className="text-xs text-gray-400">Regula cuántos pedidos ve la cocina a la vez</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex-1">
+                        <p className="font-semibold text-gray-800 text-sm">Bloqueo de comandas</p>
+                        <p className="text-xs text-gray-400 mt-0.5">La cocina solo verá un lote de pedidos a la vez</p>
+                      </div>
+                      <button onClick={() => setBloqueoActivo(v => !v)}
+                        className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors ${bloqueoActivo ? 'bg-purple-600' : 'bg-gray-300'}`}>
+                        <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${bloqueoActivo ? 'translate-x-6' : 'translate-x-1'}`} />
+                      </button>
+                    </div>
+                    {bloqueoActivo && (
+                      <div>
+                        <p className="font-semibold text-gray-800 text-sm mb-3">Comandas por lote</p>
+                        <div className="flex gap-2">
+                          {[2, 3, 4, 5].map(n => (
+                            <button key={n} onClick={() => setBloqueoCantidad(n)}
+                              className={`flex-1 py-3 rounded-xl font-black text-lg transition-all border-2 ${bloqueoCantidad === n ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-700 border-gray-200 hover:border-purple-400'}`}>
+                              {n}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <button onClick={guardarConfiguracion} disabled={guardandoPermisos}
+                      className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 text-white font-bold py-3 rounded-xl transition-colors">
+                      {guardandoPermisos ? 'Guardando...' : '💾 Guardar configuración'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* ── RESTABLECER NEGOCIO ── */}
+              {seccionSettings === 'restablecer' && (
+                <div className="space-y-4">
+                  {pasoRestablecer === 'opciones' ? (
+                    <>
+                      <div className="bg-red-50 border border-red-200 rounded-2xl px-4 py-3 flex items-start gap-3">
+                        <ShieldAlert size={20} className="text-red-500 shrink-0 mt-0.5" />
+                        <p className="text-sm text-red-700 leading-relaxed">
+                          <strong>Acción irreversible.</strong> Los datos eliminados no se pueden recuperar. Úsalo con precaución.
+                        </p>
+                      </div>
+
+                      {/* Alcance */}
+                      <div>
+                        <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">¿Qué período eliminar?</p>
+                        <div className="flex gap-2">
+                          <button onClick={() => setRestablecerScope('todo')}
+                            className={`flex-1 py-3 rounded-xl text-sm font-bold border-2 transition-all ${restablecerScope === 'todo' ? 'bg-red-500 text-white border-red-500' : 'border-gray-200 text-gray-600 hover:border-red-300'}`}>
+                            Todo el historial
+                          </button>
+                          <button onClick={() => setRestablecerScope('desde_fecha')}
+                            className={`flex-1 py-3 rounded-xl text-sm font-bold border-2 transition-all ${restablecerScope === 'desde_fecha' ? 'bg-red-500 text-white border-red-500' : 'border-gray-200 text-gray-600 hover:border-red-300'}`}>
+                            Desde una fecha
+                          </button>
+                        </div>
+                        {restablecerScope === 'desde_fecha' && (
+                          <input type="date" value={restablecerFecha} onChange={e => setRestablecerFecha(e.target.value)}
+                            className="w-full mt-2 border-2 border-red-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-red-400" />
+                        )}
+                      </div>
+
+                      {/* Checklist */}
+                      <div>
+                        <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">¿Qué datos eliminar?</p>
+                        <div className="space-y-2">
+                          {([
+                            ['pedidos',   '📋 Pedidos y pagos', 'Historial de pedidos, ítems y cobros del período'],
+                            ['turnos',    '🔄 Turnos y caja',   'Historial de turnos, movimientos e inventario de turno'],
+                            ['clientes',  '👥 Clientes',        'Base de datos de clientes registrados (sin filtro de fecha)'],
+                            ['inventario','📦 Inventario',      'Reinicia todas las cantidades disponibles a 0'],
+                          ] as [keyof typeof restablecerItems, string, string][]).map(([key, label, desc]) => (
+                            <label key={key} className={`flex items-start gap-3 p-3.5 rounded-xl border-2 cursor-pointer transition-all ${restablecerItems[key] ? 'bg-red-50 border-red-300' : 'bg-white border-gray-200 hover:border-red-200'}`}>
+                              <input type="checkbox" checked={restablecerItems[key]}
+                                onChange={e => setRestablecerItems(prev => ({ ...prev, [key]: e.target.checked }))}
+                                className="mt-0.5 w-4 h-4 accent-red-500" />
+                              <div>
+                                <p className="font-bold text-sm text-gray-900">{label}</p>
+                                <p className="text-xs text-gray-400">{desc}</p>
+                              </div>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          const alguno = Object.values(restablecerItems).some(Boolean)
+                          if (!alguno) { toast.error('Selecciona al menos un tipo de datos'); return }
+                          if (restablecerScope === 'desde_fecha' && !restablecerFecha) { toast.error('Selecciona una fecha'); return }
+                          setPasoRestablecer('confirmar')
+                        }}
+                        className="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-3.5 rounded-2xl flex items-center justify-center gap-2 transition-colors">
+                        <AlertTriangle size={18} /> Continuar
+                      </button>
+                    </>
+                  ) : (
+                    /* Paso de confirmación */
+                    <div className="space-y-4">
+                      <div className="bg-red-100 border-2 border-red-400 rounded-2xl p-4 text-center space-y-2">
+                        <AlertTriangle size={32} className="text-red-500 mx-auto" />
+                        <p className="font-black text-red-700 text-lg">¿Estás completamente seguro?</p>
+                        <p className="text-sm text-red-600">
+                          Se eliminarán permanentemente:
+                        </p>
+                        <div className="flex flex-wrap gap-1 justify-center mt-1">
+                          {restablecerItems.pedidos   && <span className="text-xs bg-red-200 text-red-700 px-2 py-0.5 rounded-full font-bold">Pedidos y pagos</span>}
+                          {restablecerItems.turnos    && <span className="text-xs bg-red-200 text-red-700 px-2 py-0.5 rounded-full font-bold">Turnos y caja</span>}
+                          {restablecerItems.clientes  && <span className="text-xs bg-red-200 text-red-700 px-2 py-0.5 rounded-full font-bold">Clientes</span>}
+                          {restablecerItems.inventario && <span className="text-xs bg-red-200 text-red-700 px-2 py-0.5 rounded-full font-bold">Inventario (reset a 0)</span>}
+                        </div>
+                        {restablecerScope === 'desde_fecha' && restablecerFecha && (
+                          <p className="text-xs text-red-500 mt-1">Desde: <strong>{new Date(restablecerFecha + 'T12:00:00').toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' })}</strong></p>
+                        )}
+                        {restablecerScope === 'todo' && (
+                          <p className="text-xs text-red-500 mt-1"><strong>Todo el historial</strong></p>
+                        )}
+                      </div>
+
+                      <div>
+                        <label className="text-xs font-bold text-gray-600 block mb-1.5">Escribe <strong className="text-red-600">BORRAR</strong> para confirmar:</label>
+                        <input type="text" value={restablecerConfirm} onChange={e => setRestablecerConfirm(e.target.value)}
+                          placeholder="BORRAR"
+                          className="w-full border-2 border-red-300 rounded-xl px-4 py-3 font-bold text-center text-lg focus:outline-none focus:border-red-500 tracking-widest" />
+                      </div>
+
+                      <button onClick={ejecutarRestablecer} disabled={restableciendo || restablecerConfirm !== 'BORRAR'}
+                        className="w-full bg-red-600 hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 transition-colors">
+                        {restableciendo
+                          ? <><span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Restableciendo...</>
+                          : <><RotateCcw size={18} /> Sí, restablecer definitivamente</>}
+                      </button>
+
+                      <button onClick={() => { setPasoRestablecer('opciones'); setRestablecerConfirm('') }}
+                        disabled={restableciendo}
+                        className="w-full text-gray-500 text-sm py-2 hover:text-gray-700">
+                        ← Volver
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Modal editar usuario ── */}
       {editandoUsuario && (
