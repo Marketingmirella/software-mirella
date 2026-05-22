@@ -95,9 +95,10 @@ export default function GerenciaPage() {
   const [modalUsuario, setModalUsuario] = useState(false)
   const [nuevoUsuario, setNuevoUsuario] = useState({ nombre: '', email: '', password: '', rol: 'mesera' })
   const [creandoUsuario, setCreandoUsuario] = useState(false)
-  const [listaUsuarios, setListaUsuarios] = useState<{ id: string; nombre: string; rol: string }[]>([])
-  const [editandoUsuario, setEditandoUsuario] = useState<{ id: string; nombre: string; rol: string } | null>(null)
+  const [listaUsuarios, setListaUsuarios] = useState<{ id: string; nombre: string; rol: string; activo: boolean }[]>([])
+  const [editandoUsuario, setEditandoUsuario] = useState<{ id: string; nombre: string; rol: string; activo: boolean; nuevaPassword: string } | null>(null)
   const [guardandoUsuario, setGuardandoUsuario] = useState(false)
+  const [eliminandoUsuario, setEliminandoUsuario] = useState(false)
 
   // Tiempos
   const [tiemposPorPlato, setTiemposPorPlato] = useState<TiempoStat[]>([])
@@ -548,7 +549,7 @@ export default function GerenciaPage() {
     }
     if (seccion === 'clientes') cargarClientes()
     if (seccion === 'usuarios') {
-      supabase.from('usuarios').select('id, nombre, rol').order('nombre').then(({ data }) => {
+      supabase.from('usuarios').select('id, nombre, rol, activo').order('nombre').then(({ data }) => {
         if (data) setListaUsuarios(data)
       })
     }
@@ -816,7 +817,7 @@ export default function GerenciaPage() {
       setModalUsuario(false)
       setNuevoUsuario({ nombre: '', email: '', password: '', rol: 'mesera' })
       // Recargar lista
-      const { data: ul } = await supabase.from('usuarios').select('id, nombre, rol').order('nombre')
+      const { data: ul } = await supabase.from('usuarios').select('id, nombre, rol, activo').order('nombre')
       if (ul) setListaUsuarios(ul)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -829,15 +830,60 @@ export default function GerenciaPage() {
   async function guardarCambiosUsuario() {
     if (!editandoUsuario) return
     setGuardandoUsuario(true)
+
+    // 1. Actualizar nombre y rol en la tabla usuarios
     const { error } = await supabase
       .from('usuarios')
       .update({ nombre: editandoUsuario.nombre.trim(), rol: editandoUsuario.rol })
       .eq('id', editandoUsuario.id)
-    setGuardandoUsuario(false)
-    if (error) { toast.error('No se pudo guardar'); return }
+    if (error) { toast.error('No se pudo guardar: ' + error.message); setGuardandoUsuario(false); return }
+
+    // 2. Si escribió nueva contraseña, cambiarla vía API
+    if (editandoUsuario.nuevaPassword.trim()) {
+      const res = await fetch('/api/gestionar-usuario', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: editandoUsuario.id, nuevaPassword: editandoUsuario.nuevaPassword.trim() }),
+      })
+      const data = await res.json()
+      if (!res.ok) { toast.error('Error al cambiar contraseña: ' + data.error); setGuardandoUsuario(false); return }
+    }
+
     toast.success('✅ Usuario actualizado')
     setEditandoUsuario(null)
-    const { data: ul } = await supabase.from('usuarios').select('id, nombre, rol').order('nombre')
+    setGuardandoUsuario(false)
+    const { data: ul } = await supabase.from('usuarios').select('id, nombre, rol, activo').order('nombre')
+    if (ul) setListaUsuarios(ul)
+  }
+
+  async function toggleActivoUsuario(id: string, activoActual: boolean) {
+    const res = await fetch('/api/gestionar-usuario', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, activo: !activoActual }),
+    })
+    const data = await res.json()
+    if (!res.ok) { toast.error('Error: ' + data.error); return }
+    toast.success(activoActual ? '🔒 Usuario inhabilitado' : '✅ Usuario habilitado')
+    setEditandoUsuario(null)
+    const { data: ul } = await supabase.from('usuarios').select('id, nombre, rol, activo').order('nombre')
+    if (ul) setListaUsuarios(ul)
+  }
+
+  async function eliminarUsuario(id: string, nombre: string) {
+    if (!confirm(`¿Eliminar definitivamente a "${nombre}"? Esta acción no se puede deshacer.`)) return
+    setEliminandoUsuario(true)
+    const res = await fetch('/api/gestionar-usuario', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    })
+    const data = await res.json()
+    setEliminandoUsuario(false)
+    if (!res.ok) { toast.error('Error al eliminar: ' + data.error); return }
+    toast.success(`🗑️ Usuario "${nombre}" eliminado`)
+    setEditandoUsuario(null)
+    const { data: ul } = await supabase.from('usuarios').select('id, nombre, rol, activo').order('nombre')
     if (ul) setListaUsuarios(ul)
   }
 
@@ -1950,19 +1996,22 @@ export default function GerenciaPage() {
                     gerente: 'Gerente', mesera: 'Mesera', cocina: 'Cocina', domi: 'Domi',
                   }
                   return (
-                    <div key={u.id} className={`flex items-center justify-between px-4 py-3.5 ${i !== 0 ? 'border-t border-gray-50' : ''}`}>
+                    <div key={u.id} className={`flex items-center justify-between px-4 py-3.5 ${i !== 0 ? 'border-t border-gray-50' : ''} ${!u.activo ? 'opacity-50' : ''}`}>
                       <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center font-bold text-gray-500 text-sm">
+                        <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm ${u.activo ? 'bg-gray-100 text-gray-500' : 'bg-red-100 text-red-400'}`}>
                           {u.nombre.charAt(0).toUpperCase()}
                         </div>
-                        <span className="font-medium text-gray-900 text-sm">{u.nombre}</span>
+                        <div>
+                          <span className="font-medium text-gray-900 text-sm">{u.nombre}</span>
+                          {!u.activo && <p className="text-xs text-red-500 font-medium">Inhabilitado</p>}
+                        </div>
                       </div>
                       <div className="flex items-center gap-2">
                         <span className={`text-xs font-bold px-2.5 py-1 rounded-full capitalize ${ROL_BADGE[u.rol] || 'bg-gray-100 text-gray-600'}`}>
                           {ROL_LABEL[u.rol] || u.rol}
                         </span>
                         <button
-                          onClick={() => setEditandoUsuario({ id: u.id, nombre: u.nombre, rol: u.rol })}
+                          onClick={() => setEditandoUsuario({ id: u.id, nombre: u.nombre, rol: u.rol, activo: u.activo ?? true, nuevaPassword: '' })}
                           className="w-7 h-7 bg-gray-100 hover:bg-gray-200 rounded-lg flex items-center justify-center transition-colors"
                           title="Editar usuario">
                           <Pencil size={13} className="text-gray-500" />
@@ -2792,12 +2841,13 @@ export default function GerenciaPage() {
       {/* ── Modal editar usuario ── */}
       {editandoUsuario && (
         <div className="fixed inset-0 bg-black/50 flex items-end justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-sm fade-in space-y-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm fade-in space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center">
               <h3 className="font-bold text-lg">Editar usuario</h3>
               <button onClick={() => setEditandoUsuario(null)}><X size={20} /></button>
             </div>
 
+            {/* Nombre */}
             <div>
               <label className="text-sm font-medium text-gray-700 block mb-1">Nombre</label>
               <input
@@ -2808,6 +2858,7 @@ export default function GerenciaPage() {
               />
             </div>
 
+            {/* Rol */}
             <div>
               <label className="text-sm font-medium text-gray-700 block mb-1">Rol / Panel que verá</label>
               <select
@@ -2819,17 +2870,49 @@ export default function GerenciaPage() {
                 <option value="gerente">👔 Gerente — ve el panel completo</option>
                 <option value="domi">🛵 Domi — ve el panel de domicilios</option>
               </select>
-              <p className="text-xs text-gray-400 mt-1.5">
-                ⚠️ El cambio aplica la próxima vez que el usuario inicie sesión.
-              </p>
+              <p className="text-xs text-gray-400 mt-1.5">⚠️ El cambio aplica la próxima vez que el usuario inicie sesión.</p>
             </div>
 
+            {/* Nueva contraseña */}
+            <div>
+              <label className="text-sm font-medium text-gray-700 block mb-1">Nueva contraseña <span className="text-gray-400 font-normal">(dejar vacío para no cambiar)</span></label>
+              <input
+                type="password"
+                value={editandoUsuario.nuevaPassword}
+                onChange={e => setEditandoUsuario(p => p ? { ...p, nuevaPassword: e.target.value } : p)}
+                placeholder="••••••••"
+                className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
+              />
+            </div>
+
+            {/* Guardar nombre/rol/contraseña */}
             <button
               onClick={guardarCambiosUsuario}
               disabled={guardandoUsuario || !editandoUsuario.nombre.trim()}
               className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 text-white font-bold py-3 rounded-xl transition-colors">
-              {guardandoUsuario ? 'Guardando...' : 'Guardar cambios'}
+              {guardandoUsuario ? 'Guardando...' : '💾 Guardar cambios'}
             </button>
+
+            <div className="border-t pt-4 space-y-3">
+              {/* Inhabilitar / Habilitar */}
+              <button
+                onClick={() => toggleActivoUsuario(editandoUsuario.id, editandoUsuario.activo)}
+                className={`w-full font-bold py-3 rounded-xl transition-colors border-2 ${
+                  editandoUsuario.activo
+                    ? 'border-orange-400 text-orange-600 hover:bg-orange-50'
+                    : 'border-green-500 text-green-600 hover:bg-green-50'
+                }`}>
+                {editandoUsuario.activo ? '🔒 Inhabilitar acceso' : '✅ Habilitar acceso'}
+              </button>
+
+              {/* Eliminar */}
+              <button
+                onClick={() => eliminarUsuario(editandoUsuario.id, editandoUsuario.nombre)}
+                disabled={eliminandoUsuario}
+                className="w-full bg-red-50 hover:bg-red-100 disabled:bg-gray-100 border-2 border-red-300 text-red-600 font-bold py-3 rounded-xl transition-colors">
+                {eliminandoUsuario ? 'Eliminando...' : '🗑️ Eliminar usuario definitivamente'}
+              </button>
+            </div>
           </div>
         </div>
       )}
