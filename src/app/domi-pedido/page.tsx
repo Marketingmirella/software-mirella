@@ -102,14 +102,34 @@ export default function DomiPedidoPage() {
   }, [paso, pedidoId, supabase, domiEnCamino])
 
   // ── CARRITO ───────────────────────────────────────────────────
+  function stockDisponible(platoId: string): number {
+    const p = platos.find(pl => pl.id === platoId)
+    return p?.inventario?.[0]?.cantidad_disponible ?? 0
+  }
+
   function agregar(plato: Plato) {
+    const disp = stockDisponible(plato.id)
+    const enCarrito = carrito.find(i => i.plato.id === plato.id)?.cantidad ?? 0
+    if (enCarrito >= disp) {
+      toast.error('No hay más unidades disponibles')
+      return
+    }
     setCarrito(prev => {
       const existe = prev.find(i => i.plato.id === plato.id)
       if (existe) return prev.map(i => i.plato.id === plato.id ? { ...i, cantidad: i.cantidad + 1 } : i)
       return [...prev, { plato, cantidad: 1, notas: '' }]
     })
   }
+
   function cambiarCantidad(id: string, delta: number) {
+    if (delta > 0) {
+      const disp = stockDisponible(id)
+      const enCarrito = carrito.find(i => i.plato.id === id)?.cantidad ?? 0
+      if (enCarrito >= disp) {
+        toast.error('No hay más unidades disponibles')
+        return
+      }
+    }
     setCarrito(prev => prev.map(i => i.plato.id === id ? { ...i, cantidad: Math.max(0, i.cantidad + delta) } : i).filter(i => i.cantidad > 0))
   }
 
@@ -447,14 +467,16 @@ export default function DomiPedidoPage() {
             <p className="text-gray-400 text-sm">Tu carrito está vacío</p>
             <button onClick={() => setPaso('menu')} className="mt-3 text-blue-500 font-semibold text-sm">← Volver al menú</button>
           </div>
-        ) : carrito.map(item => (
+        ) : carrito.map(item => {
+          const dispCarrito = stockDisponible(item.plato.id)
+          return (
           <div key={item.plato.id} className="bg-white rounded-2xl p-4 border border-gray-100 shadow-sm">
             <div className="flex items-center justify-between mb-2">
               <p className="font-semibold text-gray-900">{item.plato.nombre}</p>
               <div className="flex items-center gap-2">
                 <button onClick={() => cambiarCantidad(item.plato.id, -1)} className="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center"><Minus size={12} /></button>
                 <span className="font-bold w-5 text-center">{item.cantidad}</span>
-                <button onClick={() => cambiarCantidad(item.plato.id, 1)} className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center"><Plus size={12} /></button>
+                <button onClick={() => cambiarCantidad(item.plato.id, 1)} disabled={item.cantidad >= dispCarrito} className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center disabled:opacity-40"><Plus size={12} /></button>
               </div>
             </div>
             <p className="text-blue-500 text-sm font-bold">${(item.plato.precio * item.cantidad).toLocaleString('es-CO')}</p>
@@ -462,7 +484,8 @@ export default function DomiPedidoPage() {
               onChange={e => setCarrito(prev => prev.map(i => i.plato.id === item.plato.id ? { ...i, notas: e.target.value } : i))}
               className="mt-2 w-full text-sm border border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-300" />
           </div>
-        ))}
+          )
+        })}
       </div>
       {carrito.length > 0 && (
         <div className="fixed bottom-0 left-0 right-0 bg-white border-t p-4 shadow-xl">
